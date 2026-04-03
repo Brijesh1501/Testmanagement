@@ -66,33 +66,41 @@ async function handleRegister(e) {
   setLoading('reg-btn', 'reg-btn-text', true, 'Creating account…');
   hideError('register-error');
 
-  const { data, error } = await sb.auth.signUp({
-    email,
-    password,
-    options: { data: { full_name: name, role: 'student' } }
-  });
+  const withTimeout = (promise, ms) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out. Check your connection.')), ms))
+  ]);
 
-  setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
-  if (error) { showError('register-error', error.message); return; }
+  try {
+    const { data, error } = await withTimeout(
+      sb.auth.signUp({ email, password, options: { data: { full_name: name, role: 'student' } } }),
+      12000
+    );
 
-  // Update profile name (trigger creates the row)
-  if (data.user) {
-    await sb.from('profiles').upsert({ id: data.user.id, full_name: name, role: 'student' });
-  }
+    setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
+    if (error) { showError('register-error', error.message); return; }
 
-  // If session exists, email confirmation is disabled — log the user straight in
-  if (data.session) {
-    currentUser    = data.user;
-    currentProfile = await fetchProfile(data.user.id);
-    if (!currentProfile) {
-      // Profile may not exist yet if trigger hasn't fired; create a minimal one
-      currentProfile = { id: data.user.id, full_name: name, role: 'student' };
+    // Upsert profile row
+    if (data.user) {
+      await sb.from('profiles').upsert({ id: data.user.id, full_name: name, role: 'student' });
     }
-    showApp();
-  } else {
-    // Email confirmation required — send them back to login with a message
-    showToast('Account created! Please check your email to confirm, then sign in.', 'success');
-    showAuthPage('login-page');
+
+    // If session exists, email confirmation is disabled — log straight in
+    if (data.session) {
+      currentUser    = data.user;
+      currentProfile = await withTimeout(fetchProfile(data.user.id), 8000);
+      if (!currentProfile) {
+        currentProfile = { id: data.user.id, full_name: name, role: 'student' };
+      }
+      showApp();
+    } else {
+      showToast('Account created! Please check your email to confirm, then sign in.', 'success');
+      showAuthPage('login-page');
+    }
+  } catch (err) {
+    setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
+    showError('register-error', err.message || 'Something went wrong. Please try again.');
+    console.error('Register error:', err);
   }
 }
 
@@ -105,20 +113,32 @@ async function handleLogin(e) {
   setLoading('login-btn', 'login-btn-text', true, 'Signing in…');
   hideError('login-error');
 
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
-  setLoading('login-btn', 'login-btn-text', false, 'Sign In');
-  if (error) { showError('login-error', error.message); return; }
+  const withTimeout = (promise, ms) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out. Check your connection.')), ms))
+  ]);
 
-  // Explicitly navigate — don't wait solely on onAuthStateChange
-  if (data.user) {
-    currentUser    = data.user;
-    currentProfile = await fetchProfile(data.user.id);
-    if (!currentProfile) {
-      // Profile row missing — create a minimal one so the app can load
-      await sb.from('profiles').upsert({ id: data.user.id, full_name: data.user.email, role: 'student' });
-      currentProfile = { id: data.user.id, full_name: data.user.email, role: 'student' };
+  try {
+    const { data, error } = await withTimeout(
+      sb.auth.signInWithPassword({ email, password }), 12000
+    );
+
+    setLoading('login-btn', 'login-btn-text', false, 'Sign In');
+    if (error) { showError('login-error', error.message); return; }
+
+    if (data.user) {
+      currentUser    = data.user;
+      currentProfile = await withTimeout(fetchProfile(data.user.id), 8000);
+      if (!currentProfile) {
+        await sb.from('profiles').upsert({ id: data.user.id, full_name: data.user.email, role: 'student' });
+        currentProfile = { id: data.user.id, full_name: data.user.email, role: 'student' };
+      }
+      showApp();
     }
-    showApp();
+  } catch (err) {
+    setLoading('login-btn', 'login-btn-text', false, 'Sign In');
+    showError('login-error', err.message || 'Something went wrong. Please try again.');
+    console.error('Login error:', err);
   }
 }
 
