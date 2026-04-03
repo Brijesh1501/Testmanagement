@@ -79,7 +79,21 @@ async function handleRegister(e) {
   if (data.user) {
     await sb.from('profiles').upsert({ id: data.user.id, full_name: name, role: 'student' });
   }
-  showToast('Account created! Please check your email to confirm.', 'success');
+
+  // If session exists, email confirmation is disabled — log the user straight in
+  if (data.session) {
+    currentUser    = data.user;
+    currentProfile = await fetchProfile(data.user.id);
+    if (!currentProfile) {
+      // Profile may not exist yet if trigger hasn't fired; create a minimal one
+      currentProfile = { id: data.user.id, full_name: name, role: 'student' };
+    }
+    showApp();
+  } else {
+    // Email confirmation required — send them back to login with a message
+    showToast('Account created! Please check your email to confirm, then sign in.', 'success');
+    showAuthPage('login-page');
+  }
 }
 
 // ─── AUTH: LOGIN ─────────────────────────────────────────────
@@ -91,9 +105,21 @@ async function handleLogin(e) {
   setLoading('login-btn', 'login-btn-text', true, 'Signing in…');
   hideError('login-error');
 
-  const { error } = await sb.auth.signInWithPassword({ email, password });
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
   setLoading('login-btn', 'login-btn-text', false, 'Sign In');
-  if (error) showError('login-error', error.message);
+  if (error) { showError('login-error', error.message); return; }
+
+  // Explicitly navigate — don't wait solely on onAuthStateChange
+  if (data.user) {
+    currentUser    = data.user;
+    currentProfile = await fetchProfile(data.user.id);
+    if (!currentProfile) {
+      // Profile row missing — create a minimal one so the app can load
+      await sb.from('profiles').upsert({ id: data.user.id, full_name: data.user.email, role: 'student' });
+      currentProfile = { id: data.user.id, full_name: data.user.email, role: 'student' };
+    }
+    showApp();
+  }
 }
 
 // ─── AUTH: LOGOUT ────────────────────────────────────────────
