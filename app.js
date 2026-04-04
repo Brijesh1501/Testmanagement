@@ -31,15 +31,31 @@ let pdfParsedQs    = [];     // questions parsed from PDF upload
 window.addEventListener('DOMContentLoaded', boot);
 
 async function boot() {
-  // Listen for auth state changes (handles page reload / token refresh)
+  // Show login page immediately so there's no blank screen on load
+  showAuthPage('login-page');
+
   sb.auth.onAuthStateChange(async (event, session) => {
     if (session) {
       currentUser = session.user;
-      currentProfile = await fetchProfile(currentUser.id);
-      if (currentProfile) showApp();
+
+      // Retry fetching the profile a few times — the DB trigger that creates
+      // the profile row runs asynchronously after signup, so it may not be
+      // ready on the first try.
+      currentProfile = await fetchProfileWithRetry(currentUser.id);
+
+      if (currentProfile) {
+        showApp();
+      } else {
+        // Profile still missing — show a friendly error instead of a blank screen
+        showAuthPage('login-page');
+        showError('login-error', 'Account created! Please sign in to continue.');
+        await sb.auth.signOut();
+      }
     } else {
-      currentUser = null;
+      currentUser    = null;
       currentProfile = null;
+      document.getElementById('app-container').style.display = 'none';
+      document.getElementById('auth-container').style.display = '';
       showAuthPage('login-page');
     }
   });
@@ -52,8 +68,19 @@ async function fetchProfile(uid) {
     .select('*')
     .eq('id', uid)
     .single();
-  if (error) { console.error('fetchProfile:', error); return null; }
+  if (error) return null;
   return data;
+}
+
+// The DB trigger that creates the profile row runs after auth.signUp resolves.
+// We retry up to 6 times (3 seconds total) to handle the race condition.
+async function fetchProfileWithRetry(uid, attempts = 6, delayMs = 500) {
+  for (let i = 0; i < attempts; i++) {
+    const profile = await fetchProfile(uid);
+    if (profile) return profile;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
 }
 
 // ─── AUTH: REGISTER ──────────────────────────────────────────
@@ -66,42 +93,42 @@ async function handleRegister(e) {
   setLoading('reg-btn', 'reg-btn-text', true, 'Creating account…');
   hideError('register-error');
 
-  const withTimeout = (promise, ms) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out. Check your connection.')), ms))
-  ]);
+  const { data, error } = await sb.auth.signUp({
+    email,
+    password,
+    options: { data: { full_name: name, role: 'student' } }
+  });
 
-  try {
-    const { data, error } = await withTimeout(
-      sb.auth.signUp({ email, password, options: { data: { full_name: name, role: 'student' } } }),
-      12000
-    );
+  setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
 
-    setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
-    if (error) { showError('register-error', error.message); return; }
-
-    // Upsert profile row
-    if (data.user) {
-      await sb.from('profiles').upsert({ id: data.user.id, full_name: name, role: 'student' });
-    }
-
-    // If session exists, email confirmation is disabled — log straight in
-    if (data.session) {
-      currentUser    = data.user;
-      currentProfile = await withTimeout(fetchProfile(data.user.id), 8000);
-      if (!currentProfile) {
-        currentProfile = { id: data.user.id, full_name: name, role: 'student' };
-      }
-      showApp();
-    } else {
-      showToast('Account created! Please check your email to confirm, then sign in.', 'success');
-      showAuthPage('login-page');
-    }
-  } catch (err) {
-    setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
-    showError('register-error', err.message || 'Something went wrong. Please try again.');
-    console.error('Register error:', err);
+  if (error) {
+    showError('register-error', error.message);
+    return;
   }
+
+  // Case 1: email confirmation is DISABLED in Supabase (recommended for dev)
+  // → data.session is set, onAuthStateChange fires SIGNED_IN automatically.
+  // We also manually upsert the profile here in case the trigger is slow.
+  if (data.session && data.user) {
+    await sb.from('profiles').upsert({
+      id:        data.user.id,
+      full_name: name,
+      role:      'student'
+    });
+    // onAuthStateChange will call showApp(); no need to do it here.
+    return;
+  }
+
+  // Case 2: email confirmation is ENABLED
+  // → data.session is null; user must confirm email first.
+  if (data.user && !data.session) {
+    showToast('Account created! Check your email and click the confirmation link, then sign in.', 'success');
+    showAuthPage('login-page');
+    return;
+  }
+
+  // Fallback: already-registered address (Supabase returns user but no session)
+  showError('register-error', 'This email may already be registered. Please sign in instead.');
 }
 
 // ─── AUTH: LOGIN ─────────────────────────────────────────────
@@ -113,40 +140,21 @@ async function handleLogin(e) {
   setLoading('login-btn', 'login-btn-text', true, 'Signing in…');
   hideError('login-error');
 
-  const withTimeout = (promise, ms) => Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out. Check your connection.')), ms))
-  ]);
-
-  try {
-    const { data, error } = await withTimeout(
-      sb.auth.signInWithPassword({ email, password }), 12000
-    );
-
-    setLoading('login-btn', 'login-btn-text', false, 'Sign In');
-    if (error) { showError('login-error', error.message); return; }
-
-    if (data.user) {
-      currentUser    = data.user;
-      currentProfile = await withTimeout(fetchProfile(data.user.id), 8000);
-      if (!currentProfile) {
-        await sb.from('profiles').upsert({ id: data.user.id, full_name: data.user.email, role: 'student' });
-        currentProfile = { id: data.user.id, full_name: data.user.email, role: 'student' };
-      }
-      showApp();
-    }
-  } catch (err) {
-    setLoading('login-btn', 'login-btn-text', false, 'Sign In');
-    showError('login-error', err.message || 'Something went wrong. Please try again.');
-    console.error('Login error:', err);
-  }
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  setLoading('login-btn', 'login-btn-text', false, 'Sign In');
+  if (error) showError('login-error', error.message);
 }
 
 // ─── AUTH: LOGOUT ────────────────────────────────────────────
 async function handleLogout() {
   await sb.auth.signOut();
+  // onAuthStateChange will fire and reset state, but we also reset immediately
+  // so the UI doesn't flicker on the dashboard while waiting for the event.
+  currentUser    = null;
+  currentProfile = null;
   document.getElementById('app-container').style.display = 'none';
   document.getElementById('auth-container').style.display = '';
+  showAuthPage('login-page');
 }
 
 // ─── APP SHELL ───────────────────────────────────────────────
@@ -1102,6 +1110,9 @@ function showAuthPage(id) {
   document.querySelectorAll('#auth-container > div').forEach(el => el.style.display = 'none');
   document.getElementById(id).style.display = 'grid';
 }
+
+// Alias so HTML onclick="showPage('register-page')" works correctly
+const showPage = showAuthPage;
 
 function showError(id, msg) {
   const el = document.getElementById(id);
