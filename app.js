@@ -906,69 +906,291 @@ async function processPdfFile(file) {
     status.style.borderRadius='8px'; status.style.padding='12px';
     status.textContent      = msg;
   };
-  setStatus('⏳ Parsing PDF…');
+  setStatus('⏳ Parsing PDF… (this may take a moment for large files)');
 
   try {
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-    let text = '';
-    for (let i=1; i<=pdf.numPages; i++) {
+
+    // Extract text page-by-page, preserving line structure via Y-position grouping
+    let fullText = '';
+    let totalChars = 0;
+    for (let i = 1; i <= pdf.numPages; i++) {
       const page    = await pdf.getPage(i);
       const content = await page.getTextContent();
-      text += content.items.map(it => it.str).join(' ') + '\n';
+
+      // Group text items by Y-position to reconstruct proper lines
+      // This is critical for multi-column layouts like NORCET booklets
+      const byY = {};
+      for (const item of content.items) {
+        if (!item.str || !item.str.trim()) continue;
+        const y = Math.round(item.transform[5]);
+        if (!byY[y]) byY[y] = [];
+        byY[y].push({ x: item.transform[4], str: item.str });
+      }
+
+      // Sort Y descending (top of page first), then X ascending (left to right)
+      const lines = Object.keys(byY)
+        .sort((a, b) => b - a)
+        .map(y => byY[y].sort((a, b) => a.x - b.x).map(it => it.str).join(' '));
+
+      const pageText = lines.join('\n');
+      totalChars += pageText.length;
+      fullText += pageText + '\n';
     }
-    pdfParsedQs = parsePdfText(text);
+
+    // Detect scanned / image-only PDFs early
+    const avgCharsPerPage = totalChars / pdf.numPages;
+    if (avgCharsPerPage < 80) {
+      setStatus(
+        `⚠️ This PDF appears to be a scanned image (only ${totalChars} characters from ${pdf.numPages} pages). ` +
+        `Scanned PDFs cannot be parsed — text is stored as images. ` +
+        `Run it through a free OCR tool first (e.g. iLovePDF → PDF OCR, or Smallpdf) to make text selectable, then re-upload.`,
+        'err'
+      );
+      return;
+    }
+
+    setStatus(`⏳ Extracted ${totalChars} characters from ${pdf.numPages} pages. Parsing questions…`);
+
+    // Detect which format this PDF uses and parse accordingly
+    pdfParsedQs = parsePdfText(fullText);
+
     if (pdfParsedQs.length > 0) {
       const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
       setStatus(`✅ Found ${pdfParsedQs.length} questions → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`, 'ok');
 
-      // Batch info
       const batchInfo = document.getElementById('pdf-batch-info');
       batchInfo.style.display = '';
-      batchInfo.innerHTML = `
-        <div style="font-size:12px;color:var(--muted);margin-top:8px;">
-          ${Array.from({length:sets},(_,i) => {
-            const from = i*QUESTIONS_PER_SET+1;
-            const to   = Math.min((i+1)*QUESTIONS_PER_SET, pdfParsedQs.length);
-            return `<span style="margin-right:8px;">Set ${i+1}: Q${from}–Q${to}</span>`;
-          }).join('')}
-        </div>`;
+      batchInfo.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-top:8px;">
+        ${Array.from({length:sets},(_,i) => {
+          const from = i*QUESTIONS_PER_SET+1;
+          const to   = Math.min((i+1)*QUESTIONS_PER_SET, pdfParsedQs.length);
+          return `<span style="margin-right:8px;">Set ${i+1}: Q${from}–Q${to}</span>`;
+        }).join('')}
+      </div>`;
 
       const prev = document.getElementById('pdf-preview');
-      prev.style.display='';
+      prev.style.display = '';
       prev.innerHTML = pdfParsedQs.slice(0,3).map((q,i) =>
-        `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:12px;"><strong>Q${i+1}:</strong> ${q.question.substring(0,90)}… <span style="color:#10b981;">[Ans: ${q.answer}]</span></div>`
+        `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:12px;">
+          <strong>Q${i+1}:</strong> ${q.question.substring(0,100)}…
+          <span style="color:#10b981;"> [Ans: ${q.answer}]</span>
+        </div>`
       ).join('');
       document.getElementById('import-pdf-btn').disabled = false;
     } else {
-      setStatus('❌ No questions found. PDF must use: QUESTION N → A. … B. … Answer: X format', 'err');
+      setStatus('❌ No questions found. Supported formats: (1) "QUESTION N" with A. B. C. D. and "Answer: X", or (2) numbered questions "558." with a. b. c. d. options and an answer key table at the end.', 'err');
     }
   } catch (err) {
-    setStatus('❌ Error reading PDF: '+err.message,'err');
+    setStatus('❌ Error reading PDF: ' + err.message, 'err');
   }
 }
 
-function parsePdfText(text) {
+// ─── NOISE / JUNK LINE FILTER ────────────────────────────────
+// Lines that should be ignored across all PDF formats:
+// watermarks, page numbers, Telegram handles, download notices, headers
+const JUNK_PATTERNS = [
+  /^@\w+/,                              // Telegram handles like @Berlin0145_bot
+  /^lOMoARcPSD/,                        // Studocu document IDs
+  /Downloaded by/i,                      // Studocu download footers
+  /Distribution of this document/i,
+  /Want to earn/i,
+  /Studocu is not sponsored/i,
+  /^\d{1,3}$/,                          // Standalone page numbers
+  /^NCLEX RN ACTUAL EXAM/i,             // Repeating document headers
+  /^BANK OF REAL QUESTIONS/i,
+  /^ANSWERS NCLEX/i,
+  /^NORCET \d+ SELECTION DOSE/i,
+  /Granth Shree/i,                       // Publisher watermark
+  /Berlin0145/i,
+  /^\s*$/,
+];
+
+function isJunk(line) {
+  const t = line.trim();
+  if (!t) return true;
+  return JUNK_PATTERNS.some(rx => rx.test(t));
+}
+
+function cleanLines(text) {
+  return text
+    .split('\n')
+    .filter(l => !isJunk(l))
+    .join('\n');
+}
+
+// ─── MAIN PARSER: auto-detects format ────────────────────────
+function parsePdfText(rawText) {
+  const cleaned = cleanLines(rawText);
+
+  // Try Format 1 first: "QUESTION N" keyword-based (Omega / NCLEX style)
+  const format1Results = parseFormatQuestion(cleaned);
+  if (format1Results.length >= 3) return format1Results;
+
+  // Try Format 2: numbered questions "558." with answer key table (NORCET style)
+  const format2Results = parseFormatNumbered(cleaned);
+  if (format2Results.length >= 3) return format2Results;
+
+  // Fallback: try format 1 on original text (in case junk removal was too aggressive)
+  const fallback1 = parseFormatQuestion(rawText);
+  if (fallback1.length >= 3) return fallback1;
+
+  return [];
+}
+
+// ─── FORMAT 1: "QUESTION N" keyword style (with Explanation) ─
+function parseFormatQuestion(text) {
   const qs = [];
-  const re = /QUESTION\s+(\d+)([\s\S]*?)(?=QUESTION\s+\d+|$)/gi;
+  // Match QUESTION N blocks — stops at next QUESTION N or end of string
+  const re = /QUESTION\s+\d+\s*\n([\s\S]*?)(?=QUESTION\s+\d+\s*\n|$)/gi;
   let m;
   while ((m = re.exec(text)) !== null) {
-    const block = m[2];
-    const lines = block.split(/\n/).map(l => l.trim()).filter(Boolean);
-    const opts  = { A:'', B:'', C:'', D:'' };
-    let answer='', qLines=[], foundOpt=false;
+    const block = m[1];
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+
+    const opts = { A:'', B:'', C:'', D:'' };
+    let answer = '', explanation = '';
+    const qLines = [];
+    let phase = 'question'; // question → options → answer → explanation
+
     for (const line of lines) {
-      const optM = line.match(/^([ABCD])[.)]\s+(.+)/);
-      const ansM = line.match(/^Answer[:\s]+([ABCD])/i);
-      if (ansM)       answer = ansM[1];
-      else if (optM)  { foundOpt=true; if(!opts[optM[1]]) opts[optM[1]]=optM[2]; }
-      else if (!foundOpt) qLines.push(line);
+      // Option line: "A. text" or "A) text"
+      const optM = line.match(/^([A-D])[.)]\s+(.+)/);
+      // Answer line: "Answer: B" or "Answer B"
+      const ansM = line.match(/^Answer[:\s]+([A-D])\b/i);
+      // Explanation header
+      const expM = /^Explanation[:\s]*/i.test(line);
+
+      if (ansM) {
+        answer = ansM[1].toUpperCase();
+        phase = 'answer';
+      } else if (expM) {
+        phase = 'explanation';
+        const rest = line.replace(/^Explanation[:\s]*/i, '').trim();
+        if (rest) explanation += rest + ' ';
+      } else if (phase === 'explanation') {
+        explanation += line + ' ';
+      } else if (optM) {
+        phase = 'options';
+        if (!opts[optM[1]]) opts[optM[1]] = optM[2].trim();
+      } else if (phase === 'question') {
+        qLines.push(line);
+      }
     }
+
     const qText = qLines.join(' ').trim();
-    if (qText && answer && opts.A && opts.B && opts.C && opts.D)
-      qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer });
+    if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
+      qs.push({
+        question:    qText,
+        option_a:    opts.A,
+        option_b:    opts.B,
+        option_c:    opts.C,
+        option_d:    opts.D,
+        answer:      answer,
+        explanation: explanation.trim(),
+      });
+    }
   }
+  return qs;
+}
+
+// ─── FORMAT 2: "558." numbered style with end answer key ─────
+// Used by NORCET booklets: numbered questions, a/b/c/d options,
+// and an "Answer key" table at the very end of the PDF.
+function parseFormatNumbered(text) {
+  // Step 1: Extract the answer key table if present
+  // Format: "1. C  2. B  3. D  ..." or "1.C 2.B 3.D"
+  const answerKey = {};
+  const answerKeySection = text.match(/Answer\s*[Kk]ey[\s\S]{0,50}\n([\s\S]+)/i);
+  if (answerKeySection) {
+    const keyText = answerKeySection[1];
+    // Match patterns like "558. B" or "1.C" or "558. B  559. A"
+    const keyRe = /(\d+)\.\s*([A-Da-d])/g;
+    let km;
+    while ((km = keyRe.exec(keyText)) !== null) {
+      answerKey[parseInt(km[1])] = km[2].toUpperCase();
+    }
+  }
+
+  // Step 2: Split text into question blocks
+  // A block starts with a number like "558." or "558." at start of line
+  const blockRe = /^(\d{1,4})\.\s+(.+?)(?=^\d{1,4}\.\s+|\nAnswer\s*[Kk]ey|$)/gms;
+  const qs = [];
+  let m;
+  while ((m = blockRe.exec(text)) !== null) {
+    const qNum = parseInt(m[1]);
+    const blockText = m[0];
+
+    // Skip if this looks like an answer key entry (too short, just a letter)
+    if (blockText.trim().length < 15) continue;
+
+    const lines = blockText.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+    if (lines.length < 3) continue; // Need at least question + 2 options
+
+    const opts = { A:'', B:'', C:'', D:'' };
+    // Option patterns: "a. text" "a) text" "(a) text"
+    const optRe = /^[\(\[]?([a-dA-D])[\)\].]\s+(.+)/;
+    const qLines = [];
+    let foundOpts = false;
+
+    for (const line of lines) {
+      const optM = line.match(optRe);
+      if (optM) {
+        foundOpts = true;
+        const key = optM[1].toUpperCase();
+        if (!opts[key]) opts[key] = optM[2].trim();
+      } else if (!foundOpts) {
+        // Strip leading question number if present
+        const stripped = line.replace(/^\d{1,4}\.\s*/, '');
+        if (stripped) qLines.push(stripped);
+      }
+    }
+
+    const qText = qLines.join(' ').trim();
+    // Look up answer from key, or skip if no answer available
+    const answer = answerKey[qNum] || '';
+
+    if (qText && opts.A && opts.B && opts.C && opts.D && answer) {
+      qs.push({
+        question:    qText,
+        option_a:    opts.A,
+        option_b:    opts.B,
+        option_c:    opts.C,
+        option_d:    opts.D,
+        answer:      answer,
+        explanation: '',
+      });
+    }
+  }
+
+  // If answer key was not found in text, still return questions with a placeholder
+  // (admin can edit later) — but only if we found at least some complete option sets
+  if (qs.length === 0 && answerKey && Object.keys(answerKey).length === 0) {
+    // Try without requiring an answer key — use 'A' as placeholder
+    const blockRe2 = /^(\d{1,4})\.\s+(.+?)(?=^\d{1,4}\.\s+|$)/gms;
+    let m2;
+    while ((m2 = blockRe2.exec(text)) !== null) {
+      const blockText = m2[0];
+      if (blockText.trim().length < 15) continue;
+      const lines = blockText.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+      if (lines.length < 3) continue;
+      const opts = { A:'', B:'', C:'', D:'' };
+      const optRe = /^[\(\[]?([a-dA-D])[\)\].]\s+(.+)/;
+      const qLines = [];
+      let foundOpts = false;
+      for (const line of lines) {
+        const optM = line.match(optRe);
+        if (optM) { foundOpts = true; const key = optM[1].toUpperCase(); if (!opts[key]) opts[key] = optM[2].trim(); }
+        else if (!foundOpts) { const s = line.replace(/^\d{1,4}\.\s*/, ''); if (s) qLines.push(s); }
+      }
+      const qText = qLines.join(' ').trim();
+      if (qText && opts.A && opts.B && opts.C && opts.D)
+        qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer:'A', explanation:'' });
+    }
+  }
+
   return qs;
 }
 
