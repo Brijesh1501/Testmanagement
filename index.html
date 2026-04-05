@@ -1,526 +1,1101 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OmegaTest — Professional Test Management System</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg:      #0a0e1a; --surface:#111827; --surface2:#1a2235;
-    --border:  #1e2d45; --accent:#3b82f6;  --accent2:#06b6d4;
-    --success: #10b981; --danger:#ef4444;  --warning:#f59e0b;
-    --text:    #e2e8f0; --muted:#64748b;
+// ============================================================
+// OmegaTest — app.js  (Full rewrite with all new features)
+// Features: image questions, smart PDF batch split, admin
+//           rename series/categories, admin-controlled duration,
+//           50-question batches, Supabase Storage image upload
+// ============================================================
+
+// ─── CONFIGURATION ───────────────────────────────────────────
+const SUPABASE_URL      = 'https://boefgqdudwpflltdxgav.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvZWZncWR1ZHdwZmxsdGR4Z2F2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUzODk5ODYsImV4cCI6MjA5MDk2NTk4Nn0.Mlh6O-qLEHXSqJABN7kFNTHUSIu89L8w-QFjpwRmPYY';
+const STORAGE_BUCKET    = 'question-images';
+const QUESTIONS_PER_SET = 50;
+
+// ─── SUPABASE CLIENT ─────────────────────────────────────────
+const { createClient } = window.supabase;
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: { autoRefreshToken: true, persistSession: true, detectSessionInUrl: true }
+});
+
+// ─── APP STATE ───────────────────────────────────────────────
+let currentUser    = null;
+let currentProfile = null;
+let currentTest    = null;
+let testState      = null;
+let timerInterval  = null;
+let pdfParsedQs    = [];
+let questionImageFile = null;  // pending image upload for question form
+
+// ─── BOOT ────────────────────────────────────────────────────
+window.addEventListener('DOMContentLoaded', boot);
+
+async function boot() {
+  // Show a neutral loading state — don't flash login if already logged in
+  document.getElementById('auth-container').style.display = 'none';
+  document.getElementById('app-container').style.display  = 'none';
+
+  // Check for an existing session first (handles new-tab opens)
+  const { data: { session: initialSession } } = await sb.auth.getSession();
+  if (initialSession) {
+    currentUser    = initialSession.user;
+    currentProfile = await fetchProfileWithRetry(currentUser.id);
+    if (currentProfile) {
+      showApp();
+    } else {
+      await sb.auth.signOut();
+      document.getElementById('auth-container').style.display = '';
+      showAuthPage('login-page');
+    }
+  } else {
+    document.getElementById('auth-container').style.display = '';
+    showAuthPage('login-page');
   }
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
-  .mono{font-family:'JetBrains Mono',monospace;}
-  body::before{content:'';position:fixed;inset:0;z-index:-1;background:radial-gradient(ellipse at 15% 50%,rgba(59,130,246,.07) 0%,transparent 55%),radial-gradient(ellipse at 85% 15%,rgba(6,182,212,.05) 0%,transparent 50%),var(--bg);}
-  .glass{background:rgba(17,24,39,.85);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:16px;}
-  .btn-primary{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#fff;border:none;border-radius:10px;font-family:'Sora',sans-serif;font-weight:600;font-size:14px;padding:12px 28px;cursor:pointer;transition:all .2s;letter-spacing:.02em;display:inline-flex;align-items:center;gap:6px;}
-  .btn-primary:hover:not(:disabled){opacity:.9;transform:translateY(-1px);box-shadow:0 8px 25px rgba(59,130,246,.4);}
-  .btn-primary:disabled{opacity:.45;cursor:not-allowed;}
-  .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:'Sora',sans-serif;font-weight:500;font-size:14px;padding:12px 28px;cursor:pointer;transition:all .2s;}
-  .btn-secondary:hover{border-color:var(--accent);color:var(--accent);}
-  .btn-danger{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
-  .btn-danger:hover{background:rgba(239,68,68,.2);}
-  .btn-success{background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
-  .btn-success:hover{background:rgba(16,185,129,.2);}
-  .input-field{background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:'Sora',sans-serif;font-size:14px;padding:12px 16px;width:100%;outline:none;transition:border-color .2s;}
-  .input-field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.1);}
-  .input-field::placeholder{color:var(--muted);}
-  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;color:var(--muted);cursor:pointer;transition:all .2s;font-size:14px;font-weight:500;text-decoration:none;border:1px solid transparent;}
-  .nav-item:hover{background:var(--surface2);color:var(--text);}
-  .nav-item.active{background:rgba(59,130,246,.15);color:var(--accent);border-color:rgba(59,130,246,.2);}
-  #sidebar{width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);position:fixed;left:0;top:0;bottom:0;display:flex;flex-direction:column;z-index:100;}
-  #main-content{margin-left:240px;min-height:100vh;padding:32px;max-width:calc(1200px + 240px);}
-  @media(max-width:900px){#sidebar{transform:translateX(-100%);}#main-content{margin-left:0;}}
-  .page{display:none;animation:fadeIn .3s ease;}.page.active{display:block;}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  .option-btn{display:flex;align-items:flex-start;gap:14px;padding:16px 20px;border-radius:12px;background:var(--surface2);border:1.5px solid var(--border);cursor:pointer;text-align:left;width:100%;font-family:'Sora',sans-serif;color:var(--text);font-size:14px;line-height:1.6;transition:all .2s;}
-  .option-btn:hover:not(.selected){border-color:var(--accent);background:rgba(59,130,246,.08);}
-  .option-btn.selected{border-color:var(--accent);background:rgba(59,130,246,.15);}
-  .option-label{min-width:28px;height:28px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:'JetBrains Mono',monospace;flex-shrink:0;margin-top:2px;transition:all .2s;}
-  .q-palette{display:flex;flex-wrap:wrap;gap:6px;}
-  .q-nav-btn{width:36px;height:36px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface2);color:var(--muted);font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;font-family:'JetBrains Mono',monospace;}
-  .q-nav-btn.answered{background:rgba(59,130,246,.2);border-color:var(--accent);color:var(--accent);}
-  .q-nav-btn.current{background:var(--accent);border-color:var(--accent);color:#fff;}
-  .progress-bar{background:linear-gradient(90deg,#3b82f6,#06b6d4);border-radius:9999px;transition:width .3s;}
-  .timer-ring{transition:stroke-dashoffset 1s linear;}
-  .score-ring-track{fill:none;stroke:var(--border);stroke-width:10;}
-  .score-ring-fill{fill:none;stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset 1.5s ease;}
-  .stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;transition:all .2s;}
-  .stat-card:hover{border-color:var(--accent);transform:translateY(-2px);}
-  .badge{padding:3px 10px;border-radius:9999px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;}
-  .badge-blue  {background:rgba(59,130,246,.15); color:#60a5fa;border:1px solid rgba(59,130,246,.3);}
-  .badge-green {background:rgba(16,185,129,.15); color:#34d399;border:1px solid rgba(16,185,129,.3);}
-  .badge-red   {background:rgba(239,68,68,.15);  color:#f87171;border:1px solid rgba(239,68,68,.3);}
-  .badge-yellow{background:rgba(245,158,11,.15); color:#fbbf24;border:1px solid rgba(245,158,11,.3);}
-  .data-table{width:100%;border-collapse:collapse;}
-  .data-table th{padding:12px 16px;text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border-bottom:1px solid var(--border);}
-  .data-table td{padding:14px 16px;font-size:14px;border-bottom:1px solid rgba(30,45,69,.5);vertical-align:middle;}
-  .data-table tr:hover td{background:rgba(255,255,255,.02);}
-  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
-  .modal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;}
-  .toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 20px;font-size:14px;z-index:9999;animation:slideUp .3s ease;max-width:340px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 30px rgba(0,0,0,.4);}
-  @keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
-  .auth-grid{position:fixed;inset:0;display:grid;grid-template-columns:1fr 1fr;}
-  @media(max-width:768px){.auth-grid{grid-template-columns:1fr;}}
-  ::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:var(--surface);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:var(--muted);}
-  label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
-  /* Image upload area */
-  .img-upload-zone{border:2px dashed var(--border);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative;}
-  .img-upload-zone:hover{border-color:var(--accent);}
-  .img-upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
-</style>
-</head>
-<body>
 
-<!-- ════════════ AUTH ════════════ -->
-<div id="auth-container">
-  <!-- LOGIN -->
-  <div id="login-page" class="auth-grid">
-    <div class="hidden md:flex flex-col justify-between p-12" style="background:linear-gradient(135deg,rgba(59,130,246,.09),rgba(6,182,212,.04));border-right:1px solid var(--border);">
-      <div>
-        <div class="flex items-center gap-3" style="margin-bottom:64px;">
-          <div style="width:42px;height:42px;background:linear-gradient(135deg,#3b82f6,#06b6d4);border-radius:12px;display:flex;align-items:center;justify-content:center;">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
+  // Continue listening for future auth changes (login / logout / token refresh)
+  sb.auth.onAuthStateChange(async (event, session) => {
+    // Skip INITIAL_SESSION — already handled above to avoid double-processing
+    if (event === 'INITIAL_SESSION') return;
+
+    if (session) {
+      currentUser    = session.user;
+      currentProfile = await fetchProfileWithRetry(currentUser.id);
+      if (currentProfile) {
+        showApp();
+      } else {
+        showAuthPage('login-page');
+        showError('login-error', 'Account created! Please sign in to continue.');
+        await sb.auth.signOut();
+      }
+    } else {
+      currentUser = currentProfile = null;
+      document.getElementById('app-container').style.display = 'none';
+      document.getElementById('auth-container').style.display = '';
+      showAuthPage('login-page');
+    }
+  });
+}
+
+// ─── PROFILE ─────────────────────────────────────────────────
+async function fetchProfile(uid) {
+  const { data, error } = await sb.from('profiles').select('*').eq('id', uid).single();
+  return error ? null : data;
+}
+async function fetchProfileWithRetry(uid, attempts = 6, delayMs = 500) {
+  for (let i = 0; i < attempts; i++) {
+    const p = await fetchProfile(uid);
+    if (p) return p;
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
+// ─── AUTH ────────────────────────────────────────────────────
+async function handleRegister(e) {
+  e.preventDefault();
+  const name     = document.getElementById('reg-name').value.trim();
+  const email    = document.getElementById('reg-email').value.trim();
+  const password = document.getElementById('reg-password').value;
+  setLoading('reg-btn', 'reg-btn-text', true, 'Creating account…');
+  hideError('register-error');
+  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: name, role: 'student' } } });
+  setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
+  if (error) { showError('register-error', error.message); return; }
+  if (data.session && data.user) {
+    await sb.from('profiles').upsert({ id: data.user.id, full_name: name, role: 'student' });
+    return;
+  }
+  if (data.user && !data.session) {
+    showToast('Check your email and click the confirmation link, then sign in.', 'success');
+    showAuthPage('login-page');
+  }
+}
+async function handleLogin(e) {
+  e.preventDefault();
+  const email    = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
+  setLoading('login-btn', 'login-btn-text', true, 'Signing in…');
+  hideError('login-error');
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  setLoading('login-btn', 'login-btn-text', false, 'Sign In');
+  if (error) showError('login-error', error.message);
+}
+async function handleLogout() {
+  await sb.auth.signOut();
+  currentUser = currentProfile = null;
+  document.getElementById('app-container').style.display = 'none';
+  document.getElementById('auth-container').style.display = '';
+  showAuthPage('login-page');
+}
+
+// ─── APP SHELL ───────────────────────────────────────────────
+function showApp() {
+  document.getElementById('auth-container').style.display = 'none';
+  document.getElementById('app-container').style.display  = '';
+  renderSidebar();
+  // Always reset first, then show only for admin
+  document.getElementById('admin-nav-section').style.display =
+    currentProfile.role === 'admin' ? '' : 'none';
+  navigateTo('dashboard');
+}
+function renderSidebar() {
+  const name = currentProfile.full_name || currentUser.email;
+  document.getElementById('user-name-sidebar').textContent = name;
+  document.getElementById('user-role-badge').textContent   = currentProfile.role === 'admin' ? 'Administrator' : 'Student';
+  document.getElementById('user-avatar').textContent       = name[0].toUpperCase();
+}
+function navigateTo(page) {
+  // Block non-admins from accessing admin pages
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions'];
+  if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
+    showToast('Access denied — admin only.', 'error');
+    navigateTo('dashboard');
+    return;
+  }
+
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.add('active');
+  const navEl = document.getElementById('nav-' + page);
+  if (navEl) navEl.classList.add('active');
+  const loaders = {
+    'dashboard':       loadDashboard,
+    'tests':           loadTestSeries,
+    'results':         loadResults,
+    'profile':         loadProfile,
+    'admin-dashboard': loadAdminDashboard,
+    'admin-users':     loadAdminUsers,
+    'admin-series':    loadAdminSeries,
+    'admin-questions': loadAdminQuestions,
+  };
+  if (loaders[page]) loaders[page]();
+}
+
+// ─── DASHBOARD ───────────────────────────────────────────────
+async function loadDashboard() {
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  document.getElementById('dash-greeting').textContent =
+    `${greeting}, ${currentProfile.full_name || 'there'}! 👋`;
+
+  const { data: attempts } = await sb
+    .from('test_attempts').select('*, test_series(name)')
+    .eq('user_id', currentUser.id).order('submitted_at', { ascending: false });
+
+  const total   = attempts?.length || 0;
+  const avgPct  = total ? +(attempts.reduce((s,a) => s + +a.percentage, 0) / total).toFixed(1) : 0;
+  const bestPct = total ? Math.max(...attempts.map(a => +a.percentage)) : 0;
+  const totalQ  = attempts?.reduce((s,a) => s + a.total_questions, 0) || 0;
+
+  document.getElementById('dash-stats').innerHTML =
+    statCard('Total Tests',  total,       '#3b82f6', iconClip)  +
+    statCard('Avg Score',    avgPct + '%','#10b981', iconWave)  +
+    statCard('Best Score',   bestPct+'%', '#f59e0b', iconStar)  +
+    statCard('Qs Attempted', totalQ,      '#06b6d4', iconClock);
+
+  const recent = (attempts || []).slice(0, 5);
+  document.getElementById('dash-recent-attempts').innerHTML = recent.length
+    ? recent.map(a => `
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);">
+          <div style="width:40px;height:40px;border-radius:10px;background:${+a.percentage>=60?'rgba(16,185,129,0.15)':'rgba(239,68,68,0.15)'};display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:${+a.percentage>=60?'#10b981':'#ef4444'};">${a.percentage}%</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${a.test_series?.name||'—'}</div>
+            <div style="font-size:11px;color:var(--muted);">${a.score}/${a.total_questions} correct · ${fmtDate(a.submitted_at)}</div>
           </div>
-          <span style="font-size:20px;font-weight:800;letter-spacing:-.02em;">OmegaTest</span>
+          <span class="badge ${+a.percentage>=60?'badge-green':'badge-red'}">${+a.percentage>=60?'Pass':'Fail'}</span>
+        </div>`).join('')
+    : emptyState('No tests taken yet. Start practising!');
+
+  if ((attempts || []).length >= 2) {
+    const trend = [...(attempts || [])].reverse().slice(-6);
+    document.getElementById('dash-performance').innerHTML = `
+      <div style="display:flex;align-items:flex-end;gap:6px;height:110px;padding:8px 0;">
+        ${trend.map(a => `
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+            <div style="font-size:10px;color:var(--muted);">${a.percentage}%</div>
+            <div style="width:28px;border-radius:4px 4px 0 0;background:linear-gradient(to top,#3b82f6,#06b6d4);height:${Math.max(4,+a.percentage*0.8)}px;"></div>
+            <div style="font-size:9px;color:var(--muted);text-align:center;">${(a.test_series?.name||'').substring(0,8)}</div>
+          </div>`).join('')}
+      </div>`;
+  }
+}
+
+// ─── TEST SERIES (Student) ────────────────────────────────────
+async function loadTestSeries() {
+  const grid = document.getElementById('test-series-grid');
+  grid.innerHTML = skeletonGrid(3);
+
+  const { data: series, error } = await sb.from('test_series').select('*').eq('is_active', true).order('created_at');
+  if (error) { grid.innerHTML = errorState(error.message); return; }
+  if (!series?.length) { grid.innerHTML = emptyState('No test series available yet.', true); return; }
+
+  const { data: qCounts }   = await sb.from('questions').select('series_id');
+  const { data: myAttempts }= await sb.from('test_attempts').select('series_id, percentage').eq('user_id', currentUser.id);
+
+  const qMap = {}; (qCounts||[]).forEach(q => { qMap[q.series_id] = (qMap[q.series_id]||0)+1; });
+  const attMap = {}; (myAttempts||[]).forEach(a => {
+    if (!attMap[a.series_id]) attMap[a.series_id] = { count: 0, best: 0 };
+    attMap[a.series_id].count++;
+    attMap[a.series_id].best = Math.max(attMap[a.series_id].best, +a.percentage);
+  });
+
+  grid.innerHTML = series.map(s => {
+    const qc  = qMap[s.id] || 0;
+    const att = attMap[s.id];
+    return `
+    <div class="glass p-6 flex flex-col" style="transition:all 0.2s;"
+      onmouseenter="this.style.transform='translateY(-4px)';this.style.borderColor='var(--accent)'"
+      onmouseleave="this.style.transform='';this.style.borderColor=''">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;">
+          ${iconClip}
         </div>
-        <h1 style="font-size:44px;font-weight:800;line-height:1.15;letter-spacing:-.03em;margin-bottom:20px;">Master Every<br><span style="background:linear-gradient(135deg,#3b82f6,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Examination</span></h1>
-        <p style="color:var(--muted);font-size:16px;line-height:1.7;max-width:380px;">Professional test management platform — timed assessments, instant analytics, and a rich question bank powered by Supabase.</p>
+        ${att ? `<span class="badge badge-green">Best: ${att.best}%</span>` : '<span class="badge badge-blue">New</span>'}
       </div>
-      <div style="display:flex;gap:40px;">
-        <div><div style="font-size:30px;font-weight:800;color:#3b82f6;">50</div><div style="color:var(--muted);font-size:13px;">Qs per Set</div></div>
-        <div><div style="font-size:30px;font-weight:800;color:#06b6d4;">Live</div><div style="color:var(--muted);font-size:13px;">Analytics</div></div>
-        <div><div style="font-size:30px;font-weight:800;color:#10b981;">Admin</div><div style="color:var(--muted);font-size:13px;">Panel</div></div>
+      <h3 style="font-size:16px;font-weight:700;margin-bottom:8px;line-height:1.3;">${s.name}</h3>
+      <p style="font-size:13px;color:var(--muted);line-height:1.6;flex:1;margin-bottom:16px;">${s.description}</p>
+      <div style="display:flex;gap:16px;margin-bottom:16px;font-size:12px;color:var(--muted);flex-wrap:wrap;">
+        <span>⏱ ${s.duration_minutes} min</span>
+        <span>📝 ${qc}/${s.total_questions} Qs</span>
+        ${s.subject ? `<span>🏷 ${s.subject}</span>` : ''}
+        ${att ? `<span>🔄 ${att.count} attempt${att.count>1?'s':''}</span>` : ''}
       </div>
-    </div>
-    <div class="flex items-center justify-center p-8">
-      <div style="width:100%;max-width:400px;">
-        <h2 style="font-size:26px;font-weight:700;margin-bottom:6px;">Welcome back</h2>
-        <p style="color:var(--muted);font-size:14px;margin-bottom:32px;">Sign in to continue your journey</p>
-        <div id="login-error" class="hidden" style="margin-bottom:16px;padding:12px 16px;border-radius:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:13px;"></div>
-        <form onsubmit="handleLogin(event)" style="display:flex;flex-direction:column;gap:16px;">
-          <div><label>Email Address</label><input type="email" id="login-email" class="input-field" placeholder="you@example.com" required></div>
-          <div><label>Password</label><input type="password" id="login-password" class="input-field" placeholder="••••••••" required></div>
-          <button type="submit" id="login-btn" class="btn-primary" style="width:100%;padding:14px;justify-content:center;margin-top:4px;"><span id="login-btn-text">Sign In</span></button>
-        </form>
-        <p style="text-align:center;margin-top:20px;font-size:14px;color:var(--muted);">No account? <a href="#" onclick="showPage('register-page')" style="color:var(--accent);font-weight:600;">Create one →</a></p>
-        <p style="text-align:center;margin-top:8px;"><a href="#" onclick="showAdminLogin()" style="font-size:12px;color:var(--muted);">Admin quick-fill</a></p>
-      </div>
-    </div>
-  </div>
-
-  <!-- REGISTER -->
-  <div id="register-page" class="auth-grid" style="display:none;">
-    <div class="hidden md:flex flex-col justify-between p-12" style="background:linear-gradient(135deg,rgba(16,185,129,.08),rgba(6,182,212,.04));border-right:1px solid var(--border);">
-      <div>
-        <div class="flex items-center gap-3" style="margin-bottom:64px;">
-          <div style="width:42px;height:42px;background:linear-gradient(135deg,#3b82f6,#06b6d4);border-radius:12px;display:flex;align-items:center;justify-content:center;">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-          </div>
-          <span style="font-size:20px;font-weight:800;letter-spacing:-.02em;">OmegaTest</span>
-        </div>
-        <h1 style="font-size:44px;font-weight:800;line-height:1.15;letter-spacing:-.03em;margin-bottom:20px;">Start Your<br><span style="background:linear-gradient(135deg,#10b981,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Journey Today</span></h1>
-        <p style="color:var(--muted);font-size:16px;line-height:1.7;max-width:360px;">Join students preparing for NORCET, AIIMS, and other nursing exams with our proven system.</p>
-      </div>
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:16px;padding:20px;">
-        <p style="font-size:13px;color:var(--muted);font-style:italic;line-height:1.7;">"OmegaTest helped me ace my NORCET exam with targeted practice and real-time feedback."</p>
-        <p style="font-size:13px;font-weight:700;margin-top:10px;color:#10b981;">— Nursing Officer Aspirant</p>
-      </div>
-    </div>
-    <div class="flex items-center justify-center p-8">
-      <div style="width:100%;max-width:400px;">
-        <h2 style="font-size:26px;font-weight:700;margin-bottom:6px;">Create Account</h2>
-        <p style="color:var(--muted);font-size:14px;margin-bottom:32px;">Fill in your details to get started</p>
-        <div id="register-error" class="hidden" style="margin-bottom:16px;padding:12px 16px;border-radius:10px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;font-size:13px;"></div>
-        <form onsubmit="handleRegister(event)" style="display:flex;flex-direction:column;gap:16px;">
-          <div><label>Full Name</label><input type="text" id="reg-name" class="input-field" placeholder="Jane Doe" required></div>
-          <div><label>Email Address</label><input type="email" id="reg-email" class="input-field" placeholder="you@example.com" required></div>
-          <div><label>Password</label><input type="password" id="reg-password" class="input-field" placeholder="Min 6 characters" required minlength="6"></div>
-          <button type="submit" id="reg-btn" class="btn-primary" style="width:100%;padding:14px;justify-content:center;margin-top:4px;"><span id="reg-btn-text">Create Account</span></button>
-        </form>
-        <p style="text-align:center;margin-top:20px;font-size:14px;color:var(--muted);">Have an account? <a href="#" onclick="showPage('login-page')" style="color:var(--accent);font-weight:600;">Sign in →</a></p>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ════════════ APP SHELL ════════════ -->
-<div id="app-container" style="display:none;">
-  <div id="sidebar">
-    <div style="padding:20px;border-bottom:1px solid var(--border);">
-      <div class="flex items-center gap-3">
-        <div style="width:36px;height:36px;background:linear-gradient(135deg,#3b82f6,#06b6d4);border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-        </div>
-        <span style="font-size:18px;font-weight:800;letter-spacing:-.02em;">OmegaTest</span>
-      </div>
-    </div>
-    <nav style="padding:16px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
-      <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:0 4px;">Student</div>
-      <a class="nav-item active" id="nav-dashboard"  onclick="navigateTo('dashboard')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Dashboard</a>
-      <a class="nav-item" id="nav-tests"    onclick="navigateTo('tests')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>Test Series</a>
-      <a class="nav-item" id="nav-results"  onclick="navigateTo('results')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>My Results</a>
-      <a class="nav-item" id="nav-profile"  onclick="navigateTo('profile')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Profile</a>
-      <div id="admin-nav-section" style="display:none;margin-top:8px;">
-        <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:0 4px;">Admin</div>
-        <a class="nav-item" id="nav-admin-dashboard" onclick="navigateTo('admin-dashboard')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Admin Panel</a>
-        <a class="nav-item" id="nav-admin-users"     onclick="navigateTo('admin-users')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Manage Users</a>
-        <a class="nav-item" id="nav-admin-series"    onclick="navigateTo('admin-series')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Test Series</a>
-        <a class="nav-item" id="nav-admin-questions" onclick="navigateTo('admin-questions')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/></svg>Question Bank</a>
-      </div>
-    </nav>
-    <div style="padding:16px;border-top:1px solid var(--border);">
-      <div style="display:flex;align-items:center;gap:10px;padding:12px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);">
-        <div id="user-avatar" style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">U</div>
-        <div style="flex:1;min-width:0;">
-          <div id="user-name-sidebar" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</div>
-          <div id="user-role-badge"   style="font-size:11px;color:var(--muted);">Student</div>
-        </div>
-        <button onclick="handleLogout()" title="Logout" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div id="main-content">
-    <!-- DASHBOARD -->
-    <div id="page-dashboard" class="page active">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
-        <div>
-          <h1 id="dash-greeting" style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Good morning! 👋</h1>
-          <p style="color:var(--muted);font-size:14px;">Here's your learning progress overview</p>
-        </div>
-        <button onclick="navigateTo('tests')" class="btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 3l14 9-14 9V3z"/></svg>Take a Test</button>
-      </div>
-      <div id="dash-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:32px;"></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div class="glass p-6"><h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Recent Attempts</h3><div id="dash-recent-attempts"></div></div>
-        <div class="glass p-6"><h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Performance Trend</h3><div id="dash-performance" style="color:var(--muted);font-size:13px;text-align:center;padding:32px 0;">Complete a test to see your trend.</div></div>
-      </div>
-    </div>
-
-    <!-- TESTS -->
-    <div id="page-tests" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Choose a series and begin your timed assessment</p></div>
-      <div id="test-series-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
-    </div>
-
-    <!-- MY RESULTS -->
-    <div id="page-results" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">My Results</h1><p style="color:var(--muted);font-size:14px;">Review your past attempts and see detailed answer breakdowns</p></div>
-      <div class="glass overflow-hidden">
-        <div style="padding:20px;border-bottom:1px solid var(--border);"><input type="text" class="input-field" placeholder="Search by test name…" style="max-width:280px;" oninput="filterResults(this.value)"></div>
-        <div style="overflow-x:auto;">
-          <table class="data-table"><thead><tr><th>Test Series</th><th>Score</th><th>Correct/Total</th><th>Time</th><th>Date</th><th>Status</th><th>Action</th></tr></thead>
-          <tbody id="results-body"><tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">Loading…</td></tr></tbody></table>
-        </div>
-      </div>
-    </div>
-
-    <!-- PROFILE -->
-    <div id="page-profile" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;">My Profile</h1></div>
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div class="glass p-6 text-center">
-          <div id="profile-avatar" style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;margin:0 auto 16px;"></div>
-          <h2 id="profile-name"  style="font-size:18px;font-weight:700;margin-bottom:4px;"></h2>
-          <p  id="profile-email" style="color:var(--muted);font-size:13px;margin-bottom:16px;"></p>
-          <span id="profile-role-badge" class="badge badge-blue"></span>
-        </div>
-        <div class="glass p-6 md:col-span-2">
-          <h3 style="font-size:15px;font-weight:700;margin-bottom:20px;">Edit Profile</h3>
-          <form onsubmit="updateProfile(event)" style="display:flex;flex-direction:column;gap:16px;">
-            <div><label>Full Name</label><input type="text" id="edit-name" class="input-field" required></div>
-            <div><label>Email</label><input type="email" id="edit-email" class="input-field" disabled style="opacity:.6;"></div>
-            <div><label>New Password (optional)</label><input type="password" id="edit-password" class="input-field" placeholder="Leave blank to keep current"></div>
-            <button type="submit" class="btn-primary" style="align-self:flex-start;padding:12px 24px;">Save Changes</button>
-          </form>
-        </div>
-      </div>
-      <div class="glass p-6" style="margin-top:24px;">
-        <h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">My Statistics</h3>
-        <div id="profile-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
-      </div>
-    </div>
-
-    <!-- ADMIN DASHBOARD -->
-    <div id="page-admin-dashboard" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Admin Dashboard</h1><p style="color:var(--muted);font-size:14px;">System-wide overview</p></div>
-      <div id="admin-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:32px;"></div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <div class="glass p-6"><h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Recent Registrations</h3><div id="admin-recent-users"></div></div>
-        <div class="glass p-6"><h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Top Performing Tests</h3><div id="admin-top-tests"></div></div>
-      </div>
-    </div>
-
-    <!-- ADMIN USERS -->
-    <div id="page-admin-users" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Manage Users</h1><p style="color:var(--muted);font-size:14px;">View, promote, and remove user accounts</p></div>
-      <div class="glass overflow-hidden">
-        <div style="padding:20px;border-bottom:1px solid var(--border);"><input type="text" class="input-field" placeholder="Search users…" style="max-width:280px;" oninput="filterUsers(this.value)"></div>
-        <div style="overflow-x:auto;">
-          <table class="data-table"><thead><tr><th>Name</th><th>User ID</th><th>Role</th><th>Tests</th><th>Avg Score</th><th>Joined</th><th>Actions</th></tr></thead>
-          <tbody id="users-body"></tbody></table>
-        </div>
-      </div>
-    </div>
-
-    <!-- ADMIN SERIES -->
-    <div id="page-admin-series" class="page">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
-        <div><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Create and manage test series — rename freely</p></div>
-        <button onclick="openAddSeriesModal()" class="btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>New Series</button>
-      </div>
-      <div id="series-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
-    </div>
-
-    <!-- ADMIN QUESTIONS -->
-    <div id="page-admin-questions" class="page">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
-        <div><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Question Bank</h1><p style="color:var(--muted);font-size:14px;">Add, edit and import questions — image support included</p></div>
-        <div style="display:flex;gap:10px;">
-          <button onclick="openPdfUploadModal()" class="btn-secondary">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:6px;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>Upload PDF
-          </button>
-          <button onclick="openAddQuestionModal()" class="btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>Add Question</button>
-        </div>
-      </div>
-      <div class="glass p-4" style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;">
-        <select id="q-filter-series" class="input-field" style="max-width:240px;" onchange="loadAdminQuestions()"><option value="">All Series</option></select>
-        <input type="text" class="input-field" placeholder="Search questions…" oninput="filterQuestions(this.value)">
-      </div>
-      <div class="glass overflow-hidden">
-        <table class="data-table"><thead><tr><th>#</th><th>Question</th><th>Option A</th><th>Ans</th><th>Series</th><th>Actions</th></tr></thead>
-        <tbody id="questions-body"></tbody></table>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ════════════ TEST INTERFACE ════════════ -->
-<div id="test-interface" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:500;overflow-y:auto;">
-  <div style="max-width:1100px;margin:0 auto;padding:20px 24px;">
-    <div class="glass p-4" style="margin-bottom:24px;display:flex;align-items:center;gap:16px;">
-      <button onclick="confirmExitTest()" style="background:none;border:none;color:var(--muted);cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px;font-family:Sora,sans-serif;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>Exit
+      <button onclick="startTest('${s.id}')" class="btn-primary" style="width:100%;" ${qc===0?'disabled':''}>
+        ${qc===0 ? 'No Questions Yet' : att ? 'Retake Test' : 'Start Test'}
       </button>
-      <div style="flex:1;">
-        <div id="test-title" style="font-size:15px;font-weight:700;"></div>
-        <div style="height:4px;background:var(--surface2);border-radius:9999px;margin-top:8px;overflow:hidden;"><div id="test-progress-bar" class="progress-bar" style="height:100%;width:2%;"></div></div>
+    </div>`;
+  }).join('');
+}
+
+// ─── TEST ENGINE ─────────────────────────────────────────────
+async function startTest(seriesId) {
+  const { data: series }    = await sb.from('test_series').select('*').eq('id', seriesId).single();
+  const { data: questions } = await sb.from('questions').select('*').eq('series_id', seriesId);
+
+  if (!questions?.length) { showToast('No questions in this series yet!', 'error'); return; }
+
+  const shuffled = [...questions].sort(() => Math.random() - 0.5).slice(0, series.total_questions);
+
+  currentTest = series;
+  testState = {
+    questions:        shuffled,
+    answers:          new Array(shuffled.length).fill(null),
+    marked:           new Array(shuffled.length).fill(false),
+    currentIndex:     0,
+    startTime:        Date.now(),
+    totalSeconds:     series.duration_minutes * 60,
+    remainingSeconds: series.duration_minutes * 60,
+    submitted:        false
+  };
+
+  document.getElementById('test-interface').style.display = '';
+  document.getElementById('test-title').textContent = series.name;
+  renderQuestion();
+  buildPalette();
+  startTimer();
+}
+
+function renderQuestion() {
+  const { questions, answers, currentIndex } = testState;
+  const q     = questions[currentIndex];
+  const total = questions.length;
+
+  document.getElementById('q-num-badge').textContent    = 'Q' + (currentIndex + 1);
+  document.getElementById('question-text').textContent   = q.question;
+  document.getElementById('test-q-counter').textContent  = `${currentIndex+1}/${total}`;
+  document.getElementById('test-progress-bar').style.width = ((currentIndex+1)/total*100) + '%';
+
+  // Question image
+  const qImg = document.getElementById('question-image-container');
+  if (q.image_url) {
+    qImg.innerHTML = `<img src="${q.image_url}" alt="Question image"
+      style="max-width:100%;max-height:260px;border-radius:10px;object-fit:contain;border:1px solid var(--border);">`;
+    qImg.style.display = '';
+  } else {
+    qImg.innerHTML = '';
+    qImg.style.display = 'none';
+  }
+
+  const isLast = currentIndex === total - 1;
+  document.getElementById('next-btn').style.display   = isLast ? 'none' : '';
+  document.getElementById('submit-btn').style.display  = isLast ? '' : 'none';
+  document.getElementById('prev-btn').disabled         = currentIndex === 0;
+
+  const marked = testState.marked[currentIndex];
+  const mb = document.getElementById('mark-btn');
+  mb.style.background  = marked ? 'rgba(245,158,11,0.2)' : '';
+  mb.style.borderColor = marked ? '#f59e0b' : '';
+  mb.style.color       = marked ? '#f59e0b' : '';
+
+  const opts = document.getElementById('options-container');
+  opts.innerHTML = ['A','B','C','D'].map(letter => {
+    const text     = q['option_' + letter.toLowerCase()];
+    const selected = answers[currentIndex] === letter;
+    return `<button class="option-btn ${selected?'selected':''}" onclick="selectAnswer('${letter}')">
+      <span class="option-label" style="${selected?'background:var(--accent);color:white;':''}">${letter}</span>
+      <span>${text}</span>
+    </button>`;
+  }).join('');
+
+  document.getElementById('explanation-box').classList.add('hidden');
+}
+
+function selectAnswer(letter) {
+  if (testState.submitted) return;
+  testState.answers[testState.currentIndex] = letter;
+  updatePaletteBtn(testState.currentIndex);
+  document.querySelectorAll('.option-btn').forEach((btn, i) => {
+    const l = ['A','B','C','D'][i];
+    btn.classList.toggle('selected', l === letter);
+    const lbl = btn.querySelector('.option-label');
+    lbl.style.background = l === letter ? 'var(--accent)' : '';
+    lbl.style.color      = l === letter ? 'white' : '';
+  });
+}
+
+function nextQuestion()  { if (testState.currentIndex < testState.questions.length-1) { testState.currentIndex++; renderQuestion(); updatePaletteActive(); } }
+function prevQuestion()  { if (testState.currentIndex > 0) { testState.currentIndex--; renderQuestion(); updatePaletteActive(); } }
+function markForReview() { testState.marked[testState.currentIndex] = !testState.marked[testState.currentIndex]; renderQuestion(); updatePaletteBtn(testState.currentIndex); }
+function jumpToQuestion(i) { testState.currentIndex = i; renderQuestion(); updatePaletteActive(); }
+
+function buildPalette() {
+  document.getElementById('q-palette').innerHTML = testState.questions.map((_, i) =>
+    `<button class="q-nav-btn ${i===0?'current':''}" id="pq-${i}" onclick="jumpToQuestion(${i})">${i+1}</button>`
+  ).join('');
+}
+function updatePaletteBtn(index) {
+  const btn = document.getElementById('pq-' + index);
+  if (!btn) return;
+  const answered = testState.answers[index] !== null;
+  const marked   = testState.marked[index];
+  const current  = index === testState.currentIndex;
+  btn.className = 'q-nav-btn';
+  btn.style.background = btn.style.borderColor = btn.style.color = '';
+  if (current)  { btn.classList.add('current'); return; }
+  if (marked)   { btn.style.background='rgba(245,158,11,0.2)';btn.style.borderColor='#f59e0b';btn.style.color='#f59e0b'; return; }
+  if (answered) btn.classList.add('answered');
+}
+function updatePaletteActive() { testState.questions.forEach((_, i) => updatePaletteBtn(i)); }
+
+// ─── TIMER ───────────────────────────────────────────────────
+function startTimer() {
+  clearInterval(timerInterval);
+  updateTimerDisplay();
+  timerInterval = setInterval(() => {
+    testState.remainingSeconds--;
+    updateTimerDisplay();
+    if (testState.remainingSeconds <= 0) { clearInterval(timerInterval); submitTest(true); }
+  }, 1000);
+}
+function updateTimerDisplay() {
+  const s  = testState.remainingSeconds;
+  const m  = Math.floor(s/60);
+  const ss = s%60;
+  const td = document.getElementById('timer-display');
+  td.textContent = `${m}:${ss.toString().padStart(2,'0')}`;
+  td.style.color = s<=60?'#ef4444':s<=300?'#f59e0b':'var(--text)';
+  const pct  = s / testState.totalSeconds;
+  const C    = 163.36;
+  const ring = document.getElementById('timer-ring');
+  ring.setAttribute('stroke-dashoffset', C*(1-pct));
+  ring.setAttribute('stroke', s<=60?'#ef4444':s<=300?'#f59e0b':'#3b82f6');
+}
+
+// ─── SUBMIT TEST ─────────────────────────────────────────────
+function confirmSubmitTest() {
+  const answered   = testState.answers.filter(a => a!==null).length;
+  const unanswered = testState.questions.length - answered;
+  showConfirm('Submit Test',
+    unanswered>0 ? `You have ${unanswered} unanswered question${unanswered>1?'s':''}. Submit anyway?` : 'You answered all questions. Ready to submit?',
+    () => submitTest(false), '⚠️');
+}
+
+async function submitTest(timeUp = false) {
+  clearInterval(timerInterval);
+  testState.submitted = true;
+  const { questions, answers, startTime } = testState;
+  let correct=0, incorrect=0, skipped=0;
+  questions.forEach((q,i) => {
+    if (!answers[i]) skipped++;
+    else if (answers[i]===q.answer) correct++;
+    else incorrect++;
+  });
+  const timeTaken  = Math.floor((Date.now()-startTime)/1000);
+  const total      = questions.length;
+  const percentage = +(correct/total*100).toFixed(2);
+  const isPassed   = percentage >= (currentTest.pass_percentage || 60);
+
+  const { data: attempt, error: attErr } = await sb
+    .from('test_attempts')
+    .insert({ user_id:currentUser.id, series_id:currentTest.id, score:correct, total_questions:total, percentage, time_taken_secs:timeTaken, is_passed:isPassed })
+    .select().single();
+
+  if (attErr) { showToast('Error saving result: '+attErr.message,'error'); return; }
+
+  await sb.from('attempt_answers').insert(
+    questions.map((q,i) => ({
+      attempt_id:    attempt.id,
+      question_id:   q.id,
+      user_answer:   answers[i]||null,
+      correct_answer:q.answer,
+      is_correct:    answers[i]===q.answer,
+      question_text: q.question,
+      image_url:     q.image_url||null,
+      option_a:      q.option_a,
+      option_b:      q.option_b,
+      option_c:      q.option_c,
+      option_d:      q.option_d,
+      explanation:   q.explanation||''
+    }))
+  );
+
+  document.getElementById('test-interface').style.display = 'none';
+  showResultScreen({ ...attempt, seriesName:currentTest.name, correct, incorrect, skipped, total, percentage, timeTaken, isPassed, questions: questions.map((q,i)=>({ ...q, user_answer:answers[i], is_correct:answers[i]===q.answer, question_text:q.question })) });
+}
+
+function confirmExitTest() {
+  showConfirm('Exit Test','Your progress will be lost. Are you sure?', () => {
+    clearInterval(timerInterval);
+    document.getElementById('test-interface').style.display = 'none';
+    navigateTo('tests');
+  }, '🚪');
+}
+
+// ─── RESULT SCREEN ───────────────────────────────────────────
+function showResultScreen(result) {
+  document.getElementById('result-screen').style.display = '';
+  document.getElementById('result-test-name').textContent = result.seriesName;
+  document.getElementById('result-score-pct').textContent = result.percentage + '%';
+  document.getElementById('res-correct').textContent    = result.correct;
+  document.getElementById('res-incorrect').textContent   = result.incorrect;
+  document.getElementById('res-skipped').textContent    = result.skipped;
+  document.getElementById('res-time').textContent       = fmtDuration(result.timeTaken||result.time_taken_secs);
+  const color = result.percentage>=60?'#10b981':result.percentage>=40?'#f59e0b':'#ef4444';
+  document.getElementById('result-score-pct').style.color = color;
+  const ring = document.getElementById('score-ring');
+  ring.setAttribute('stroke', color);
+  setTimeout(() => ring.setAttribute('stroke-dashoffset', 439.82*(1-result.percentage/100)), 100);
+  document.getElementById('answer-review-section').style.display = 'none';
+  window._lastResult = result;
+}
+
+function showAnswerReview() {
+  const result = window._lastResult;
+  document.getElementById('answer-review-section').style.display = '';
+  document.getElementById('answer-review-list').innerHTML = result.questions.map((q, i) => {
+    const isCorrect = q.is_correct;
+    const skipped   = !q.user_answer;
+    return `
+    <div class="glass p-5" style="border-left:3px solid ${isCorrect?'#10b981':skipped?'#f59e0b':'#ef4444'};">
+      <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">
+        Q${i+1} · ${isCorrect?'✅ Correct':skipped?'⏭ Skipped':'❌ Incorrect'}
       </div>
-      <div style="text-align:center;"><div style="font-size:10px;color:var(--muted);margin-bottom:2px;">QUESTION</div><div id="test-q-counter" class="mono" style="font-size:18px;font-weight:700;">1/50</div></div>
-      <div>
-        <div style="position:relative;width:60px;height:60px;">
-          <svg width="60" height="60" viewBox="0 0 60 60"><circle cx="30" cy="30" r="26" fill="none" stroke="var(--border)" stroke-width="5"/>
-            <circle id="timer-ring" cx="30" cy="30" r="26" fill="none" stroke="#3b82f6" stroke-width="5" stroke-linecap="round" stroke-dasharray="163.36" stroke-dashoffset="0" transform="rotate(-90 30 30)" class="timer-ring"/></svg>
-          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;"><div id="timer-display" class="mono" style="font-size:12px;font-weight:700;"></div></div>
+      <p style="font-size:14px;font-weight:500;margin-bottom:12px;line-height:1.6;">${q.question_text||q.question}</p>
+      ${q.image_url ? `<img src="${q.image_url}" alt="" style="max-width:100%;max-height:200px;border-radius:8px;margin-bottom:12px;object-fit:contain;">` : ''}
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        ${['A','B','C','D'].map(l => `
+          <div style="padding:8px 12px;border-radius:8px;font-size:13px;
+            background:${l===q.correct_answer?'rgba(16,185,129,0.15)':l===q.user_answer&&!isCorrect?'rgba(239,68,68,0.1)':'var(--surface2)'};
+            border:1px solid ${l===q.correct_answer?'rgba(16,185,129,0.4)':l===q.user_answer&&!isCorrect?'rgba(239,68,68,0.3)':'var(--border)'};
+            color:${l===q.correct_answer?'#10b981':l===q.user_answer&&!isCorrect?'#ef4444':'var(--text)'};">
+            <strong>${l}.</strong> ${q['option_'+l.toLowerCase()]}
+          </div>`).join('')}
+      </div>
+      ${q.explanation ? `<div style="font-size:13px;color:#60a5fa;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;line-height:1.6;"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+async function viewResultById(attemptId) {
+  const { data: attempt }  = await sb.from('test_attempts').select('*, test_series(name)').eq('id', attemptId).single();
+  const { data: answers }  = await sb.from('attempt_answers').select('*').eq('attempt_id', attemptId);
+  let correct=0, incorrect=0, skipped=0;
+  (answers||[]).forEach(a => { if(!a.user_answer) skipped++; else if(a.is_correct) correct++; else incorrect++; });
+  showResultScreen({ ...attempt, seriesName:attempt.test_series?.name||'—', correct, incorrect, skipped, total:attempt.total_questions, percentage:attempt.percentage, timeTaken:attempt.time_taken_secs, isPassed:attempt.is_passed, questions:answers||[] });
+  showAnswerReview();
+}
+function closeResultScreen() { document.getElementById('result-screen').style.display='none'; navigateTo('dashboard'); }
+
+// ─── MY RESULTS ──────────────────────────────────────────────
+async function loadResults() {
+  const { data: attempts } = await sb.from('test_attempts').select('*, test_series(name)')
+    .eq('user_id', currentUser.id).order('submitted_at', { ascending:false });
+  window._resultsCache = attempts || [];
+  renderResultsTable(attempts||[]);
+}
+function renderResultsTable(attempts) {
+  const body = document.getElementById('results-body');
+  if (!attempts.length) { body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No results yet. Take a test!</td></tr>`; return; }
+  body.innerHTML = attempts.map(a => `
+    <tr>
+      <td><div style="font-weight:600;font-size:13px;">${a.test_series?.name||'—'}</div></td>
+      <td><div style="font-size:16px;font-weight:800;color:${+a.percentage>=60?'#10b981':+a.percentage>=40?'#f59e0b':'#ef4444'}">${a.percentage}%</div></td>
+      <td><span class="mono" style="font-size:13px;">${a.score}/${a.total_questions}</span></td>
+      <td style="font-size:13px;color:var(--muted);">${fmtDuration(a.time_taken_secs)}</td>
+      <td style="font-size:13px;color:var(--muted);">${fmtDate(a.submitted_at)}</td>
+      <td><span class="badge ${a.is_passed?'badge-green':'badge-red'}">${a.is_passed?'Pass':'Fail'}</span></td>
+      <td><button onclick="viewResultById('${a.id}')" class="btn-success" style="font-size:12px;padding:6px 12px;">View</button></td>
+    </tr>`).join('');
+}
+function filterResults(query) {
+  const q = query.toLowerCase();
+  renderResultsTable((window._resultsCache||[]).filter(a => (a.test_series?.name||'').toLowerCase().includes(q)));
+}
+
+// ─── PROFILE ─────────────────────────────────────────────────
+async function loadProfile() {
+  const p    = currentProfile;
+  const name = p.full_name||'';
+  document.getElementById('profile-avatar').textContent    = name[0]?.toUpperCase()||'U';
+  document.getElementById('profile-name').textContent      = name;
+  document.getElementById('profile-email').textContent     = currentUser.email;
+  document.getElementById('profile-role-badge').textContent= p.role==='admin'?'Administrator':'Student';
+  document.getElementById('edit-name').value               = name;
+  document.getElementById('edit-email').value              = currentUser.email;
+  const { data: attempts } = await sb.from('test_attempts').select('percentage, is_passed').eq('user_id', currentUser.id);
+  const total   = attempts?.length||0;
+  const avg     = total ? +(attempts.reduce((s,a) => s + +a.percentage,0)/total).toFixed(1) : 0;
+  const best    = total ? Math.max(...attempts.map(a => +a.percentage)) : 0;
+  const passRate= total ? +(attempts.filter(a => a.is_passed).length/total*100).toFixed(1) : 0;
+  document.getElementById('profile-stats').innerHTML =
+    statCard('Tests Taken', total,        '#3b82f6', iconClip)  +
+    statCard('Avg Score',   avg+'%',      '#10b981', iconWave)  +
+    statCard('Best Score',  best+'%',     '#f59e0b', iconStar)  +
+    statCard('Pass Rate',   passRate+'%', '#06b6d4', iconCheck);
+}
+async function updateProfile(e) {
+  e.preventDefault();
+  const name     = document.getElementById('edit-name').value.trim();
+  const password = document.getElementById('edit-password').value;
+  const { error: profErr } = await sb.from('profiles').update({ full_name:name }).eq('id', currentUser.id);
+  if (profErr) { showToast('Error: '+profErr.message,'error'); return; }
+  if (password) {
+    const { error: pwErr } = await sb.auth.updateUser({ password });
+    if (pwErr) { showToast('Password error: '+pwErr.message,'error'); return; }
+  }
+  currentProfile.full_name = name;
+  renderSidebar();
+  loadProfile();
+  showToast('Profile updated!','success');
+}
+
+// ─── ADMIN DASHBOARD ─────────────────────────────────────────
+async function loadAdminDashboard() {
+  const [
+    { count:userCount  }, { count:seriesCount },
+    { count:qCount     }, { count:attCount    },
+    { data:recentUsers }, { data:topSeries    }
+  ] = await Promise.all([
+    sb.from('profiles').select('*',{count:'exact',head:true}).neq('role','admin'),
+    sb.from('test_series').select('*',{count:'exact',head:true}),
+    sb.from('questions').select('*',{count:'exact',head:true}),
+    sb.from('test_attempts').select('*',{count:'exact',head:true}),
+    sb.from('profiles').select('*').order('created_at',{ascending:false}).limit(5),
+    sb.from('series_stats').select('*').order('attempt_count',{ascending:false}).limit(5)
+  ]);
+  document.getElementById('admin-stats').innerHTML =
+    statCard('Total Users',  userCount  ||0,'#3b82f6',iconUser)  +
+    statCard('Test Series',  seriesCount||0,'#10b981',iconClip)  +
+    statCard('Total Qs',     qCount     ||0,'#f59e0b',iconQ   )  +
+    statCard('Attempts',     attCount   ||0,'#06b6d4',iconWave);
+  document.getElementById('admin-recent-users').innerHTML = (recentUsers||[]).map(u => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">${(u.full_name||'U')[0].toUpperCase()}</div>
+      <div><div style="font-size:13px;font-weight:600;">${u.full_name||'—'}</div><span class="badge ${u.role==='admin'?'badge-yellow':'badge-blue'}" style="font-size:10px;">${u.role}</span></div>
+      <div style="margin-left:auto;font-size:11px;color:var(--muted);">${fmtDate(u.created_at)}</div>
+    </div>`).join('')||emptyState('No users yet');
+  document.getElementById('admin-top-tests').innerHTML = (topSeries||[]).map(s => `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+      <div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.series_name}</div>
+      <div style="font-size:11px;color:var(--muted);">Avg: ${s.avg_percentage||0}% · Pass: ${s.pass_rate||0}%</div></div>
+      <span class="badge badge-blue">${s.attempt_count} attempts</span>
+    </div>`).join('')||emptyState('No attempts yet');
+}
+
+// ─── ADMIN USERS ─────────────────────────────────────────────
+async function loadAdminUsers() {
+  const { data: users } = await sb.from('user_stats').select('*').order('created_at',{ascending:false});
+  window._usersCache = users||[];
+  renderUsersTable(users||[]);
+}
+function renderUsersTable(users) {
+  document.getElementById('users-body').innerHTML = users.map(u => `
+    <tr>
+      <td><div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">${(u.full_name||'U')[0].toUpperCase()}</div>
+        <span style="font-weight:600;font-size:13px;">${u.full_name||'—'}</span>
+      </div></td>
+      <td style="font-size:12px;color:var(--muted);">${u.user_id}</td>
+      <td><span class="badge ${u.role==='admin'?'badge-yellow':'badge-blue'}">${u.role}</span></td>
+      <td style="font-size:13px;">${u.tests_taken||0}</td>
+      <td style="font-size:13px;">${u.avg_score?u.avg_score+'%':'—'}</td>
+      <td style="font-size:13px;color:var(--muted);">${fmtDate(u.created_at)}</td>
+      <td><div style="display:flex;gap:6px;">
+        ${u.role!=='admin'?`<button onclick="setUserRole('${u.user_id}','admin')" class="btn-success" style="font-size:11px;padding:6px 10px;">Make Admin</button>`:`<button onclick="setUserRole('${u.user_id}','student')" class="btn-secondary" style="font-size:11px;padding:6px 10px;">Revoke</button>`}
+        ${u.user_id!==currentUser.id?`<button onclick="deleteUser('${u.user_id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Delete</button>`:''}
+      </div></td>
+    </tr>`).join('')||`<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No users found.</td></tr>`;
+}
+function filterUsers(q) { renderUsersTable((window._usersCache||[]).filter(u => (u.full_name||'').toLowerCase().includes(q.toLowerCase()))); }
+async function setUserRole(uid, role) {
+  const { error } = await sb.from('profiles').update({ role }).eq('id', uid);
+  if (error) { showToast('Error: '+error.message,'error'); return; }
+  showToast('Role updated!','success'); loadAdminUsers();
+}
+async function deleteUser(uid) {
+  showConfirm('Delete User','This permanently deletes the user and all their data.', async () => {
+    const { error } = await sb.from('profiles').delete().eq('id', uid);
+    if (error) { showToast('Error: '+error.message,'error'); return; }
+    showToast('User deleted.','success'); loadAdminUsers();
+  }, '🗑️');
+}
+
+// ─── ADMIN SERIES ─────────────────────────────────────────────
+async function loadAdminSeries() {
+  const { data: series }    = await sb.from('test_series').select('*').order('created_at');
+  const { data: qCounts }   = await sb.from('questions').select('series_id');
+  const { data: attCounts } = await sb.from('test_attempts').select('series_id');
+  const qMap={};   (qCounts  ||[]).forEach(q => { qMap[q.series_id]  =(qMap[q.series_id] ||0)+1; });
+  const attMap={}; (attCounts||[]).forEach(a => { attMap[a.series_id]=(attMap[a.series_id]||0)+1; });
+  document.getElementById('series-list').innerHTML = (series||[]).map(s => `
+    <div class="glass p-5">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <span class="badge ${s.is_active?'badge-green':'badge-red'}">${s.is_active?'Active':'Inactive'}</span>
+        <div style="display:flex;gap:6px;">
+          <button onclick="editSeries('${s.id}')" class="btn-success" style="font-size:11px;padding:6px 10px;">Edit</button>
+          <button onclick="deleteSeries('${s.id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Delete</button>
         </div>
       </div>
+      <h3 style="font-size:15px;font-weight:700;margin-bottom:4px;">${s.name}</h3>
+      ${s.subject?`<p style="font-size:11px;color:var(--accent);margin-bottom:6px;">🏷 ${s.subject}</p>`:''}
+      <p style="font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.5;">${s.description}</p>
+      <div style="display:flex;gap:12px;font-size:12px;color:var(--muted);flex-wrap:wrap;">
+        <span>⏱ ${s.duration_minutes} min</span>
+        <span>📝 ${qMap[s.id]||0}/${s.total_questions} Qs</span>
+        <span>🔄 ${attMap[s.id]||0} attempts</span>
+        <span>✅ Pass: ${s.pass_percentage}%</span>
+      </div>
+    </div>`).join('')||`<div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1;">No series yet. Create one!</div>`;
+}
+
+function openAddSeriesModal() {
+  document.getElementById('series-modal-title').textContent = 'Create Test Series';
+  document.getElementById('series-edit-id').value   = '';
+  document.getElementById('series-name').value      = '';
+  document.getElementById('series-desc').value      = '';
+  document.getElementById('series-duration').value  = '60';
+  document.getElementById('series-total-q').value   = '50';
+  document.getElementById('series-pass-pct').value  = '60';
+  document.getElementById('series-subject').value   = '';
+  document.getElementById('series-active').checked  = true;
+  document.getElementById('add-series-modal').style.display = 'flex';
+}
+async function editSeries(id) {
+  const { data: s } = await sb.from('test_series').select('*').eq('id', id).single();
+  document.getElementById('series-modal-title').textContent = 'Edit Test Series';
+  document.getElementById('series-edit-id').value   = id;
+  document.getElementById('series-name').value      = s.name;
+  document.getElementById('series-desc').value      = s.description;
+  document.getElementById('series-duration').value  = s.duration_minutes;
+  document.getElementById('series-total-q').value   = s.total_questions;
+  document.getElementById('series-pass-pct').value  = s.pass_percentage;
+  document.getElementById('series-subject').value   = s.subject;
+  document.getElementById('series-active').checked  = s.is_active;
+  document.getElementById('add-series-modal').style.display = 'flex';
+}
+async function saveSeries(e) {
+  e.preventDefault();
+  const editId = document.getElementById('series-edit-id').value;
+  const payload = {
+    name:            document.getElementById('series-name').value.trim(),
+    description:     document.getElementById('series-desc').value.trim(),
+    duration_minutes:parseInt(document.getElementById('series-duration').value),
+    total_questions: parseInt(document.getElementById('series-total-q').value),
+    pass_percentage: parseInt(document.getElementById('series-pass-pct').value),
+    subject:         document.getElementById('series-subject').value.trim(),
+    is_active:       document.getElementById('series-active').checked,
+  };
+  const query = editId
+    ? sb.from('test_series').update(payload).eq('id', editId)
+    : sb.from('test_series').insert({ ...payload, created_by:currentUser.id });
+  const { error } = await query;
+  if (error) { showToast('Error: '+error.message,'error'); return; }
+  closeModal('add-series-modal'); loadAdminSeries();
+  showToast(editId?'Series updated!':'Series created!','success');
+}
+async function deleteSeries(id) {
+  showConfirm('Delete Series','This deletes the series, all its questions and attempt records.', async () => {
+    const { error } = await sb.from('test_series').delete().eq('id', id);
+    if (error) { showToast('Error: '+error.message,'error'); return; }
+    showToast('Series deleted.','success'); loadAdminSeries();
+  }, '🗑️');
+}
+
+// ─── ADMIN QUESTIONS ─────────────────────────────────────────
+async function loadAdminQuestions() {
+  const { data: series } = await sb.from('test_series').select('id,name').order('name');
+  const filterVal = document.getElementById('q-filter-series').value;
+  const opts = (series||[]).map(s => `<option value="${s.id}" ${s.id===filterVal?'selected':''}>${s.name}</option>`).join('');
+  document.getElementById('q-filter-series').innerHTML  = `<option value="">All Series</option>` + opts;
+  document.getElementById('question-series').innerHTML  = `<option value="">Select series...</option>` + opts;
+  document.getElementById('pdf-series-select').innerHTML= `<option value="">Select series prefix...</option>` + opts;
+
+  let qQuery = sb.from('questions').select('*, test_series(name)').order('order_index').order('created_at');
+  if (filterVal) qQuery = qQuery.eq('series_id', filterVal);
+  const { data: questions } = await qQuery;
+  window._questionsCache = questions||[];
+  renderQuestionsTable(questions||[]);
+}
+
+function renderQuestionsTable(questions) {
+  document.getElementById('questions-body').innerHTML = questions.map((q, i) => `
+    <tr>
+      <td class="mono" style="font-size:12px;color:var(--muted);">${i+1}</td>
+      <td style="max-width:280px;font-size:13px;">
+        ${q.image_url?`<img src="${q.image_url}" style="width:32px;height:32px;border-radius:4px;object-fit:cover;margin-right:6px;vertical-align:middle;" alt="">`:'' }
+        ${q.question.substring(0,70)}${q.question.length>70?'…':''}
+      </td>
+      <td style="font-size:11px;color:var(--muted);max-width:160px;">A: ${(q.option_a||'').substring(0,25)}…</td>
+      <td><span class="badge badge-green mono">${q.answer}</span></td>
+      <td style="font-size:12px;color:var(--muted);">${q.test_series?.name||'—'}</td>
+      <td><div style="display:flex;gap:6px;">
+        <button onclick="editQuestion('${q.id}')" class="btn-success" style="font-size:11px;padding:6px 10px;">Edit</button>
+        <button onclick="deleteQuestion('${q.id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Del</button>
+      </div></td>
+    </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">No questions found.</td></tr>`;
+}
+function filterQuestions(q) { renderQuestionsTable((window._questionsCache||[]).filter(qu => qu.question.toLowerCase().includes(q.toLowerCase()))); }
+
+// ─── QUESTION FORM (with image) ──────────────────────────────
+function openAddQuestionModal() {
+  document.getElementById('question-modal-title').textContent = 'Add Question';
+  document.getElementById('question-edit-id').value = '';
+  ['question-text-input','q-opt-a','q-opt-b','q-opt-c','q-opt-d','q-explanation'].forEach(id => document.getElementById(id).value='');
+  document.getElementById('q-answer').value         = '';
+  document.getElementById('question-series').value  = '';
+  document.getElementById('q-image-preview').style.display = 'none';
+  document.getElementById('q-image-preview').src    = '';
+  document.getElementById('q-current-image-url').value = '';
+  questionImageFile = null;
+  document.getElementById('add-question-modal').style.display = 'flex';
+}
+async function editQuestion(id) {
+  const { data: q } = await sb.from('questions').select('*').eq('id', id).single();
+  await loadAdminQuestions();
+  document.getElementById('question-modal-title').textContent = 'Edit Question';
+  document.getElementById('question-edit-id').value    = id;
+  document.getElementById('question-text-input').value  = q.question;
+  document.getElementById('q-opt-a').value             = q.option_a;
+  document.getElementById('q-opt-b').value             = q.option_b;
+  document.getElementById('q-opt-c').value             = q.option_c;
+  document.getElementById('q-opt-d').value             = q.option_d;
+  document.getElementById('q-answer').value            = q.answer;
+  document.getElementById('q-explanation').value       = q.explanation||'';
+  document.getElementById('question-series').value     = q.series_id;
+  document.getElementById('q-current-image-url').value = q.image_url||'';
+  questionImageFile = null;
+  const prev = document.getElementById('q-image-preview');
+  if (q.image_url) { prev.src = q.image_url; prev.style.display = ''; }
+  else { prev.style.display = 'none'; prev.src = ''; }
+  document.getElementById('add-question-modal').style.display = 'flex';
+}
+
+function handleQuestionImageSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  questionImageFile = file;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const prev = document.getElementById('q-image-preview');
+    prev.src = ev.target.result;
+    prev.style.display = '';
+  };
+  reader.readAsDataURL(file);
+}
+
+function removeQuestionImage() {
+  questionImageFile = null;
+  document.getElementById('q-current-image-url').value = '';
+  const prev = document.getElementById('q-image-preview');
+  prev.src = ''; prev.style.display = 'none';
+  document.getElementById('q-image-input').value = '';
+}
+
+async function uploadQuestionImage(file) {
+  const ext  = file.name.split('.').pop();
+  const path = `questions/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const { error } = await sb.storage.from(STORAGE_BUCKET).upload(path, file, { upsert: true });
+  if (error) throw new Error('Image upload failed: ' + error.message);
+  const { data } = sb.storage.from(STORAGE_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
+}
+
+async function saveQuestion(e) {
+  e.preventDefault();
+  const editId = document.getElementById('question-edit-id').value;
+  let imageUrl = document.getElementById('q-current-image-url').value || null;
+
+  // Upload new image if selected
+  if (questionImageFile) {
+    try {
+      showToast('Uploading image…', 'info');
+      imageUrl = await uploadQuestionImage(questionImageFile);
+    } catch (err) {
+      showToast(err.message, 'error'); return;
+    }
+  }
+
+  const payload = {
+    series_id:   document.getElementById('question-series').value,
+    question:    document.getElementById('question-text-input').value.trim(),
+    image_url:   imageUrl,
+    option_a:    document.getElementById('q-opt-a').value.trim(),
+    option_b:    document.getElementById('q-opt-b').value.trim(),
+    option_c:    document.getElementById('q-opt-c').value.trim(),
+    option_d:    document.getElementById('q-opt-d').value.trim(),
+    answer:      document.getElementById('q-answer').value,
+    explanation: document.getElementById('q-explanation').value.trim(),
+  };
+
+  const query = editId
+    ? sb.from('questions').update(payload).eq('id', editId)
+    : sb.from('questions').insert(payload);
+  const { error } = await query;
+  if (error) { showToast('Error: '+error.message,'error'); return; }
+  closeModal('add-question-modal');
+  loadAdminQuestions();
+  showToast(editId?'Question updated!':'Question added!','success');
+  questionImageFile = null;
+}
+
+async function deleteQuestion(id) {
+  showConfirm('Delete Question','Permanently delete this question?', async () => {
+    const { error } = await sb.from('questions').delete().eq('id', id);
+    if (error) { showToast('Error: '+error.message,'error'); return; }
+    showToast('Question deleted.','success'); loadAdminQuestions();
+  }, '🗑️');
+}
+
+// ─── PDF IMPORT (Smart batch split into sets of 50) ───────────
+function openPdfUploadModal() {
+  loadAdminQuestions();
+  setTimeout(() => document.getElementById('pdf-upload-modal').style.display='flex', 100);
+  document.getElementById('pdf-status').style.display   = 'none';
+  document.getElementById('pdf-preview').style.display  = 'none';
+  document.getElementById('import-pdf-btn').disabled    = true;
+  document.getElementById('pdf-batch-info').style.display = 'none';
+  pdfParsedQs = [];
+}
+
+function handlePdfDrop(e) {
+  e.preventDefault();
+  document.getElementById('pdf-drop-zone').style.borderColor = 'var(--border)';
+  const file = e.dataTransfer.files[0];
+  if (file?.type==='application/pdf') processPdfFile(file);
+  else showToast('Please upload a PDF file.','error');
+}
+function handlePdfSelect(e) { if (e.target.files[0]) processPdfFile(e.target.files[0]); }
+
+async function processPdfFile(file) {
+  const status = document.getElementById('pdf-status');
+  const setStatus = (msg, type='info') => {
+    status.style.display    = '';
+    status.style.background = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
+    status.style.border     = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
+    status.style.color      = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
+    status.style.borderRadius='8px'; status.style.padding='12px';
+    status.textContent      = msg;
+  };
+  setStatus('⏳ Parsing PDF…');
+
+  try {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let text = '';
+    for (let i=1; i<=pdf.numPages; i++) {
+      const page    = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      text += content.items.map(it => it.str).join(' ') + '\n';
+    }
+    pdfParsedQs = parsePdfText(text);
+    if (pdfParsedQs.length > 0) {
+      const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
+      setStatus(`✅ Found ${pdfParsedQs.length} questions → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`, 'ok');
+
+      // Batch info
+      const batchInfo = document.getElementById('pdf-batch-info');
+      batchInfo.style.display = '';
+      batchInfo.innerHTML = `
+        <div style="font-size:12px;color:var(--muted);margin-top:8px;">
+          ${Array.from({length:sets},(_,i) => {
+            const from = i*QUESTIONS_PER_SET+1;
+            const to   = Math.min((i+1)*QUESTIONS_PER_SET, pdfParsedQs.length);
+            return `<span style="margin-right:8px;">Set ${i+1}: Q${from}–Q${to}</span>`;
+          }).join('')}
+        </div>`;
+
+      const prev = document.getElementById('pdf-preview');
+      prev.style.display='';
+      prev.innerHTML = pdfParsedQs.slice(0,3).map((q,i) =>
+        `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:12px;"><strong>Q${i+1}:</strong> ${q.question.substring(0,90)}… <span style="color:#10b981;">[Ans: ${q.answer}]</span></div>`
+      ).join('');
+      document.getElementById('import-pdf-btn').disabled = false;
+    } else {
+      setStatus('❌ No questions found. PDF must use: QUESTION N → A. … B. … Answer: X format', 'err');
+    }
+  } catch (err) {
+    setStatus('❌ Error reading PDF: '+err.message,'err');
+  }
+}
+
+function parsePdfText(text) {
+  const qs = [];
+  const re = /QUESTION\s+(\d+)([\s\S]*?)(?=QUESTION\s+\d+|$)/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const block = m[2];
+    const lines = block.split(/\n/).map(l => l.trim()).filter(Boolean);
+    const opts  = { A:'', B:'', C:'', D:'' };
+    let answer='', qLines=[], foundOpt=false;
+    for (const line of lines) {
+      const optM = line.match(/^([ABCD])[.)]\s+(.+)/);
+      const ansM = line.match(/^Answer[:\s]+([ABCD])/i);
+      if (ansM)       answer = ansM[1];
+      else if (optM)  { foundOpt=true; if(!opts[optM[1]]) opts[optM[1]]=optM[2]; }
+      else if (!foundOpt) qLines.push(line);
+    }
+    const qText = qLines.join(' ').trim();
+    if (qText && answer && opts.A && opts.B && opts.C && opts.D)
+      qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer });
+  }
+  return qs;
+}
+
+async function importPdfQuestions() {
+  const baseName = document.getElementById('pdf-series-name').value.trim();
+  if (!baseName)           { showToast('Enter a base name for the test series.','error'); return; }
+  if (!pdfParsedQs.length) { showToast('No questions to import.','error'); return; }
+
+  const durationMins  = parseInt(document.getElementById('pdf-series-duration').value)||60;
+  const passPercent   = parseInt(document.getElementById('pdf-series-pass').value)||60;
+  const subject       = document.getElementById('pdf-series-subject').value.trim();
+  const btn           = document.getElementById('import-pdf-btn');
+  btn.disabled = true;
+  btn.textContent = 'Importing…';
+
+  const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
+  let created = 0;
+
+  for (let s = 0; s < sets; s++) {
+    const batch     = pdfParsedQs.slice(s * QUESTIONS_PER_SET, (s+1) * QUESTIONS_PER_SET);
+    const setNumber = s + 1;
+    const seriesName= sets > 1 ? `${baseName} — Set ${setNumber}` : baseName;
+
+    // Create the series
+    const { data: newSeries, error: serErr } = await sb.from('test_series').insert({
+      name:            seriesName,
+      description:     `Imported from PDF. Set ${setNumber} of ${sets}. Questions ${s*QUESTIONS_PER_SET+1}–${Math.min((s+1)*QUESTIONS_PER_SET, pdfParsedQs.length)}.`,
+      duration_minutes:durationMins,
+      total_questions: batch.length,
+      pass_percentage: passPercent,
+      subject,
+      is_active:       true,
+      created_by:      currentUser.id
+    }).select().single();
+
+    if (serErr) { showToast(`Error creating set ${setNumber}: `+serErr.message,'error'); continue; }
+
+    // Insert questions
+    const rows = batch.map((q, i) => ({ ...q, series_id:newSeries.id, order_index:i+1 }));
+    const { error: qErr } = await sb.from('questions').insert(rows);
+    if (qErr) { showToast(`Error inserting questions for set ${setNumber}: `+qErr.message,'error'); }
+    else created++;
+
+    document.getElementById('pdf-status').textContent = `Importing… set ${setNumber}/${sets} done`;
+  }
+
+  btn.disabled = false; btn.textContent = 'Import Questions';
+  closeModal('pdf-upload-modal');
+  loadAdminQuestions();
+  showToast(`✅ Imported ${pdfParsedQs.length} questions into ${created} series!`,'success');
+  pdfParsedQs = [];
+}
+
+// ─── ICON SVG SNIPPETS ───────────────────────────────────────
+const iconClip  = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>`;
+const iconWave  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`;
+const iconStar  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`;
+const iconClock = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`;
+const iconUser  = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z"/></svg>`;
+const iconQ     = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/></svg>`;
+const iconCheck = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14M22 4L12 14.01l-3-3"/></svg>`;
+
+// ─── UI HELPERS ──────────────────────────────────────────────
+function statCard(label, value, color, iconSvg) {
+  return `<div class="stat-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <div style="width:36px;height:36px;border-radius:9px;background:${color}22;display:flex;align-items:center;justify-content:center;color:${color};">${iconSvg}</div>
     </div>
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
-      <div class="lg:col-span-3">
-        <div class="glass p-8">
-          <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;">
-            <div id="q-num-badge" style="min-width:36px;height:36px;border-radius:9px;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">Q1</div>
-            <p id="question-text" style="font-size:17px;line-height:1.7;font-weight:500;"></p>
-          </div>
-          <!-- Question image (hidden when no image) -->
-          <div id="question-image-container" style="display:none;margin-bottom:20px;text-align:center;"></div>
-          <div id="options-container" style="display:flex;flex-direction:column;gap:12px;"></div>
-          <div id="explanation-box" class="hidden" style="margin-top:24px;padding:18px;border-radius:12px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);">
-            <div style="font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Explanation</div>
-            <p id="explanation-text" style="font-size:14px;line-height:1.7;"></p>
-          </div>
-        </div>
-        <div style="display:flex;gap:10px;margin-top:16px;">
-          <button onclick="prevQuestion()"      class="btn-secondary" id="prev-btn">← Prev</button>
-          <button onclick="markForReview()"     class="btn-secondary" id="mark-btn" style="flex:1;">🔖 Mark for Review</button>
-          <button onclick="nextQuestion()"      class="btn-primary"   id="next-btn">Next →</button>
-          <button onclick="confirmSubmitTest()" class="btn-primary"   id="submit-btn" style="display:none;background:linear-gradient(135deg,#10b981,#06b6d4);">Submit Test ✓</button>
-        </div>
-      </div>
-      <div class="glass p-5">
-        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:12px;">Question Palette</div>
-        <div id="q-palette" class="q-palette" style="margin-bottom:20px;"></div>
-        <div style="display:flex;flex-direction:column;gap:8px;font-size:11px;color:var(--muted);margin-bottom:16px;">
-          <div style="display:flex;align-items:center;gap:8px;"><div style="width:16px;height:16px;border-radius:4px;background:var(--accent);flex-shrink:0;"></div>Current</div>
-          <div style="display:flex;align-items:center;gap:8px;"><div style="width:16px;height:16px;border-radius:4px;background:rgba(59,130,246,.2);border:1px solid var(--accent);flex-shrink:0;"></div>Answered</div>
-          <div style="display:flex;align-items:center;gap:8px;"><div style="width:16px;height:16px;border-radius:4px;background:rgba(245,158,11,.2);border:1px solid #f59e0b;flex-shrink:0;"></div>Marked</div>
-          <div style="display:flex;align-items:center;gap:8px;"><div style="width:16px;height:16px;border-radius:4px;background:var(--surface2);border:1px solid var(--border);flex-shrink:0;"></div>Not Visited</div>
-        </div>
-        <button onclick="confirmSubmitTest()" class="btn-primary" style="width:100%;justify-content:center;">Submit Test</button>
-      </div>
-    </div>
-  </div>
-</div>
+    <div style="font-size:26px;font-weight:800;margin-bottom:4px;">${value}</div>
+    <div style="font-size:12px;color:var(--muted);">${label}</div>
+  </div>`;
+}
+function emptyState(msg, full=false) {
+  return `<div style="text-align:center;padding:60px;color:var(--muted);${full?'grid-column:1/-1;':''}">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 12px;opacity:0.3;display:block;"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
+    <p style="font-size:13px;">${msg}</p>
+  </div>`;
+}
+function skeletonGrid(n) {
+  return Array(n).fill(0).map(() =>
+    `<div class="glass p-6" style="height:220px;background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:16px;"></div>`
+  ).join('') + '<style>@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>';
+}
+function errorState(msg) { return `<div style="color:#f87171;padding:20px;text-align:center;grid-column:1/-1;">Error: ${msg}</div>`; }
+function showAuthPage(id) {
+  document.querySelectorAll('#auth-container > div').forEach(el => el.style.display='none');
+  document.getElementById(id).style.display='grid';
+}
+const showPage = showAuthPage;
+function showError(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg; el.classList.remove('hidden');
+  setTimeout(() => el.classList.add('hidden'), 5000);
+}
+function hideError(id) { document.getElementById(id)?.classList.add('hidden'); }
+function setLoading(btnId, textId, loading, text) {
+  const btn=document.getElementById(btnId), txt=document.getElementById(textId);
+  if (!btn||!txt) return;
+  btn.disabled=loading; txt.textContent=text;
+}
+function closeModal(id) { document.getElementById(id).style.display='none'; }
+function showConfirm(title, message, onConfirm, icon='⚠️') {
+  document.getElementById('confirm-title').textContent   = title;
+  document.getElementById('confirm-message').textContent = message;
+  document.getElementById('confirm-icon').textContent    = icon;
+  document.getElementById('confirm-icon').style.cssText  = 'width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(245,158,11,0.15);font-size:24px;margin:0 auto 16px;';
+  document.getElementById('confirm-modal').style.display = 'flex';
+  document.getElementById('confirm-action-btn').onclick  = () => { closeModal('confirm-modal'); onConfirm(); };
+}
+function showToast(msg, type='success') {
+  document.querySelector('.toast')?.remove();
+  const t = document.createElement('div');
+  t.className = 'toast';
+  const color = type==='success'?'#10b981':type==='error'?'#ef4444':'#3b82f6';
+  t.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></div>${msg}`;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 4000);
+}
+function fmtDate(d) { if (!d) return '—'; return new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
+function fmtDuration(s) { if (s==null) return '—'; return `${Math.floor(s/60)}m ${s%60}s`; }
 
-<!-- ════════════ RESULT SCREEN ════════════ -->
-<div id="result-screen" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:600;overflow-y:auto;">
-  <div style="max-width:900px;margin:0 auto;padding:32px 24px;">
-    <div class="glass p-8" style="margin-bottom:24px;text-align:center;">
-      <div style="font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;">Test Completed</div>
-      <h2 id="result-test-name" style="font-size:22px;font-weight:800;margin-bottom:24px;"></h2>
-      <div style="display:flex;justify-content:center;margin-bottom:24px;">
-        <div style="position:relative;width:160px;height:160px;">
-          <svg width="160" height="160" viewBox="0 0 160 160"><circle class="score-ring-track" cx="80" cy="80" r="70"/>
-            <circle id="score-ring" class="score-ring-fill" cx="80" cy="80" r="70" stroke="#10b981" stroke-dasharray="439.82" stroke-dashoffset="439.82" transform="rotate(-90 80 80)"/></svg>
-          <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;">
-            <div id="result-score-pct" style="font-size:36px;font-weight:800;"></div>
-            <div style="font-size:12px;color:var(--muted);">Score</div>
-          </div>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:24px;">
-        <div class="stat-card text-center"><div id="res-correct"   style="font-size:24px;font-weight:800;color:#10b981;"></div><div style="font-size:12px;color:var(--muted);">Correct</div></div>
-        <div class="stat-card text-center"><div id="res-incorrect" style="font-size:24px;font-weight:800;color:#ef4444;"></div><div style="font-size:12px;color:var(--muted);">Incorrect</div></div>
-        <div class="stat-card text-center"><div id="res-skipped"   style="font-size:24px;font-weight:800;color:#f59e0b;"></div><div style="font-size:12px;color:var(--muted);">Skipped</div></div>
-        <div class="stat-card text-center"><div id="res-time"      style="font-size:24px;font-weight:800;color:#3b82f6;"></div><div style="font-size:12px;color:var(--muted);">Time Taken</div></div>
-      </div>
-      <div style="display:flex;gap:12px;justify-content:center;">
-        <button onclick="showAnswerReview()" class="btn-secondary">Review Answers</button>
-        <button onclick="closeResultScreen()" class="btn-primary">Back to Dashboard</button>
-      </div>
-    </div>
-    <div id="answer-review-section" style="display:none;">
-      <h3 style="font-size:18px;font-weight:700;margin-bottom:16px;">Detailed Answer Review</h3>
-      <div id="answer-review-list" style="display:flex;flex-direction:column;gap:16px;"></div>
-    </div>
-  </div>
-</div>
-
-<!-- ════════════ MODALS ════════════ -->
-
-<!-- Add / Edit Series -->
-<div id="add-series-modal" class="modal-overlay" style="display:none;">
-  <div class="modal">
-    <h3 id="series-modal-title" style="font-size:18px;font-weight:700;margin-bottom:20px;">Create Test Series</h3>
-    <form onsubmit="saveSeries(event)" style="display:flex;flex-direction:column;gap:16px;">
-      <input type="hidden" id="series-edit-id">
-      <div><label>Series Name <span style="color:var(--muted);font-size:10px;">(e.g. "Test Series 1", "NORCET Set A")</span></label><input type="text" id="series-name" class="input-field" placeholder="Test Series 1" required></div>
-      <div><label>Description</label><textarea id="series-desc" class="input-field" rows="2" placeholder="Brief description…"></textarea></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Duration (minutes)</label><input type="number" id="series-duration" class="input-field" value="60" min="5" max="360" required></div>
-        <div><label>Total Questions</label><input type="number" id="series-total-q" class="input-field" value="50" min="1" max="300" required></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Pass % (default 60)</label><input type="number" id="series-pass-pct" class="input-field" value="60" min="1" max="100" required></div>
-        <div><label>Category / Subject <span style="color:var(--muted);font-size:10px;">(rename freely)</span></label><input type="text" id="series-subject" class="input-field" placeholder="e.g. Nursing, Medicine"></div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
-        <input type="checkbox" id="series-active" checked style="accent-color:var(--accent);width:16px;height:16px;">
-        <label for="series-active" style="font-size:14px;text-transform:none;letter-spacing:0;margin-bottom:0;cursor:pointer;">Active — visible to students</label>
-      </div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
-        <button type="button" onclick="closeModal('add-series-modal')" class="btn-secondary">Cancel</button>
-        <button type="submit" class="btn-primary">Save Series</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- Add / Edit Question (with image upload) -->
-<div id="add-question-modal" class="modal-overlay" style="display:none;">
-  <div class="modal" style="max-width:680px;">
-    <h3 id="question-modal-title" style="font-size:18px;font-weight:700;margin-bottom:20px;">Add Question</h3>
-    <form onsubmit="saveQuestion(event)" style="display:flex;flex-direction:column;gap:14px;">
-      <input type="hidden" id="question-edit-id">
-      <input type="hidden" id="q-current-image-url">
-      <div><label>Test Series</label><select id="question-series" class="input-field" required><option value="">Select series…</option></select></div>
-      <div><label>Question Text</label><textarea id="question-text-input" class="input-field" rows="3" required placeholder="Enter the question…"></textarea></div>
-
-      <!-- Image upload -->
-      <div>
-        <label>Question Image <span style="color:var(--muted);font-size:10px;">(optional — JPG, PNG, WebP)</span></label>
-        <div class="img-upload-zone" onclick="document.getElementById('q-image-input').click()">
-          <input type="file" id="q-image-input" accept="image/*" style="display:none;" onchange="handleQuestionImageSelect(event)">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 8px;display:block;color:var(--muted);"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-          <p style="font-size:13px;color:var(--muted);">Click to upload an image for this question</p>
-        </div>
-        <img id="q-image-preview" src="" alt="Preview" style="display:none;max-width:100%;max-height:180px;border-radius:8px;margin-top:10px;object-fit:contain;border:1px solid var(--border);">
-        <button type="button" onclick="removeQuestionImage()" id="q-remove-img-btn" style="margin-top:6px;font-size:12px;color:#ef4444;background:none;border:none;cursor:pointer;padding:0;" title="Remove image">✕ Remove image</button>
-      </div>
-
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Option A</label><input type="text" id="q-opt-a" class="input-field" required placeholder="Option A"></div>
-        <div><label>Option B</label><input type="text" id="q-opt-b" class="input-field" required placeholder="Option B"></div>
-        <div><label>Option C</label><input type="text" id="q-opt-c" class="input-field" required placeholder="Option C"></div>
-        <div><label>Option D</label><input type="text" id="q-opt-d" class="input-field" required placeholder="Option D"></div>
-      </div>
-      <div><label>Correct Answer</label>
-        <select id="q-answer" class="input-field" required>
-          <option value="">Select correct option…</option>
-          <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
-        </select></div>
-      <div><label>Explanation (optional)</label><textarea id="q-explanation" class="input-field" rows="2" placeholder="Why is this the correct answer?"></textarea></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
-        <button type="button" onclick="closeModal('add-question-modal')" class="btn-secondary">Cancel</button>
-        <button type="submit" class="btn-primary">Save Question</button>
-      </div>
-    </form>
-  </div>
-</div>
-
-<!-- PDF Upload (Smart batch split) -->
-<div id="pdf-upload-modal" class="modal-overlay" style="display:none;">
-  <div class="modal" style="max-width:620px;">
-    <h3 style="font-size:18px;font-weight:700;margin-bottom:6px;">Import Questions from PDF</h3>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:20px;">Questions auto-split into sets of 50 — each becomes a separate Test Series</p>
-    <div style="display:flex;flex-direction:column;gap:16px;">
-
-      <!-- Series naming + settings -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div style="grid-column:1/-1;"><label>Base Name for Test Series <span style="color:var(--muted);font-size:10px;">(e.g. "NORCET 10" → creates "NORCET 10 — Set 1", "NORCET 10 — Set 2"…)</span></label>
-          <input type="text" id="pdf-series-name" class="input-field" placeholder="NORCET 10" required></div>
-        <div><label>Duration per set (min)</label><input type="number" id="pdf-series-duration" class="input-field" value="60" min="5" max="360"></div>
-        <div><label>Pass %</label><input type="number" id="pdf-series-pass" class="input-field" value="60" min="1" max="100"></div>
-        <div style="grid-column:1/-1;"><label>Category / Subject</label><input type="text" id="pdf-series-subject" class="input-field" placeholder="e.g. Nursing Officer"></div>
-        <!-- Hidden series selector (kept for JS compatibility) -->
-        <select id="pdf-series-select" style="display:none;"></select>
-      </div>
-
-      <!-- Drop zone -->
-      <div id="pdf-drop-zone" style="border:2px dashed var(--border);border-radius:12px;padding:40px;text-align:center;cursor:pointer;transition:all .2s;"
-        onclick="document.getElementById('pdf-file-input').click()"
-        ondragover="event.preventDefault();this.style.borderColor='var(--accent)'"
-        ondragleave="this.style.borderColor='var(--border)'"
-        ondrop="handlePdfDrop(event)">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 12px;display:block;color:var(--muted);"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>
-        <div style="font-weight:600;margin-bottom:6px;">Drop PDF here or click to browse</div>
-        <div style="font-size:12px;color:var(--muted);">Format: QUESTION N → A. … B. … C. … D. … Answer: X</div>
-        <input type="file" id="pdf-file-input" accept=".pdf" style="display:none;" onchange="handlePdfSelect(event)">
-      </div>
-      <div id="pdf-status"     style="display:none;"></div>
-      <div id="pdf-batch-info" style="display:none;"></div>
-      <div id="pdf-preview"    style="display:none;max-height:160px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:12px;"></div>
-    </div>
-    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
-      <button onclick="closeModal('pdf-upload-modal')" class="btn-secondary">Cancel</button>
-      <button onclick="importPdfQuestions()" class="btn-primary" id="import-pdf-btn" disabled>Import & Create Series</button>
-    </div>
-  </div>
-</div>
-
-<!-- Confirm -->
-<div id="confirm-modal" class="modal-overlay" style="display:none;">
-  <div class="modal" style="max-width:400px;text-align:center;">
-    <div id="confirm-icon" style="margin:0 auto 16px;"></div>
-    <h3 id="confirm-title"   style="font-size:18px;font-weight:700;margin-bottom:8px;"></h3>
-    <p  id="confirm-message" style="color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6;"></p>
-    <div style="display:flex;gap:10px;justify-content:center;">
-      <button onclick="closeModal('confirm-modal')" class="btn-secondary">Cancel</button>
-      <button id="confirm-action-btn" class="btn-primary">Confirm</button>
-    </div>
-  </div>
-</div>
-
-<script src="app.js"></script>
-</body>
-</html>
+document.querySelectorAll('.modal-overlay').forEach(el => {
+  el.addEventListener('click', e => { if (e.target===el) el.style.display='none'; });
+});
+function showAdminLogin() {
+  document.getElementById('login-email').value    = 'admin@omegaTest.com';
+  document.getElementById('login-password').value = 'admin123';
+  showToast('Admin credentials filled.','info');
+}
