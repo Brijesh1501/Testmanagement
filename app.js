@@ -1,8 +1,10 @@
 // ============================================================
-// OmegaTest — app.js  (Full rewrite with all new features)
+// OmegaTest — app.js
 // Features: image questions, smart PDF batch split, admin
 //           rename series/categories, admin-controlled duration,
-//           50-question batches, Supabase Storage image upload
+//           50-question batches, Supabase Storage image upload,
+//           Format 3 NCLEX/Rationale PDF parser,
+//           DOCX import support (via mammoth.js)
 // ============================================================
 
 // ─── CONFIGURATION ───────────────────────────────────────────
@@ -24,17 +26,15 @@ let currentTest    = null;
 let testState      = null;
 let timerInterval  = null;
 let pdfParsedQs    = [];
-let questionImageFile = null;  // pending image upload for question form
+let questionImageFile = null;
 
 // ─── BOOT ────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', boot);
 
 async function boot() {
-  // Show a neutral loading state — don't flash login if already logged in
   document.getElementById('auth-container').style.display = 'none';
   document.getElementById('app-container').style.display  = 'none';
 
-  // Check for an existing session first (handles new-tab opens)
   const { data: { session: initialSession } } = await sb.auth.getSession();
   if (initialSession) {
     currentUser    = initialSession.user;
@@ -51,11 +51,8 @@ async function boot() {
     showAuthPage('login-page');
   }
 
-  // Continue listening for future auth changes (login / logout / token refresh)
   sb.auth.onAuthStateChange(async (event, session) => {
-    // Skip INITIAL_SESSION — already handled above to avoid double-processing
     if (event === 'INITIAL_SESSION') return;
-
     if (session) {
       currentUser    = session.user;
       currentProfile = await fetchProfileWithRetry(currentUser.id);
@@ -132,7 +129,6 @@ function showApp() {
   document.getElementById('auth-container').style.display = 'none';
   document.getElementById('app-container').style.display  = '';
   renderSidebar();
-  // Always reset first, then show only for admin
   document.getElementById('admin-nav-section').style.display =
     currentProfile.role === 'admin' ? '' : 'none';
   navigateTo('dashboard');
@@ -144,14 +140,12 @@ function renderSidebar() {
   document.getElementById('user-avatar').textContent       = name[0].toUpperCase();
 }
 function navigateTo(page) {
-  // Block non-admins from accessing admin pages
   const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
     showToast('Access denied — admin only.', 'error');
     navigateTo('dashboard');
     return;
   }
-
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
@@ -305,7 +299,6 @@ function renderQuestion() {
   document.getElementById('test-q-counter').textContent  = `${currentIndex+1}/${total}`;
   document.getElementById('test-progress-bar').style.width = ((currentIndex+1)/total*100) + '%';
 
-  // Question image
   const qImg = document.getElementById('question-image-container');
   if (q.image_url) {
     qImg.innerHTML = `<img src="${q.image_url}" alt="Question image"
@@ -835,7 +828,6 @@ async function saveQuestion(e) {
   const editId = document.getElementById('question-edit-id').value;
   let imageUrl = document.getElementById('q-current-image-url').value || null;
 
-  // Upload new image if selected
   if (questionImageFile) {
     try {
       showToast('Uploading image…', 'info');
@@ -876,26 +868,99 @@ async function deleteQuestion(id) {
   }, '🗑️');
 }
 
-// ─── PDF IMPORT (Smart batch split into sets of 50) ───────────
+// ─── PDF / DOCX UPLOAD MODAL ─────────────────────────────────
 function openPdfUploadModal() {
   loadAdminQuestions();
   setTimeout(() => document.getElementById('pdf-upload-modal').style.display='flex', 100);
-  document.getElementById('pdf-status').style.display   = 'none';
-  document.getElementById('pdf-preview').style.display  = 'none';
-  document.getElementById('import-pdf-btn').disabled    = true;
-  document.getElementById('pdf-batch-info').style.display = 'none';
+  resetUploadModal();
+}
+
+function resetUploadModal() {
+  document.getElementById('pdf-status').style.display    = 'none';
+  document.getElementById('pdf-preview').style.display   = 'none';
+  document.getElementById('import-pdf-btn').disabled     = true;
+  document.getElementById('pdf-batch-info').style.display= 'none';
+  // Reset file label
+  const lbl = document.getElementById('pdf-file-label');
+  if (lbl) lbl.textContent = 'Drop PDF or DOCX here, or click to browse';
   pdfParsedQs = [];
 }
 
+// Drag-and-drop — handles both PDF and DOCX
 function handlePdfDrop(e) {
   e.preventDefault();
   document.getElementById('pdf-drop-zone').style.borderColor = 'var(--border)';
   const file = e.dataTransfer.files[0];
-  if (file?.type==='application/pdf') processPdfFile(file);
-  else showToast('Please upload a PDF file.','error');
+  if (!file) return;
+  if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+    processPdfFile(file);
+  } else if (
+    file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    file.name.endsWith('.docx')
+  ) {
+    processDocxFile(file);
+  } else {
+    showToast('Please upload a PDF or DOCX file.', 'error');
+  }
 }
-function handlePdfSelect(e) { if (e.target.files[0]) processPdfFile(e.target.files[0]); }
 
+function handleFileSelect(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  if (file.name.endsWith('.pdf')) {
+    processPdfFile(file);
+  } else if (file.name.endsWith('.docx')) {
+    processDocxFile(file);
+  } else {
+    showToast('Unsupported file type. Use PDF or DOCX.', 'error');
+  }
+}
+
+// Keep old name for backward compat
+function handlePdfSelect(e) { handleFileSelect(e); }
+
+// ─── DOCX PROCESSING ─────────────────────────────────────────
+async function processDocxFile(file) {
+  const status = document.getElementById('pdf-status');
+  const setStatus = (msg, type='info') => {
+    status.style.display    = '';
+    status.style.background = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
+    status.style.border     = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
+    status.style.color      = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
+    status.style.borderRadius='8px'; status.style.padding='12px';
+    status.textContent      = msg;
+  };
+
+  // Update drop zone label
+  const lbl = document.getElementById('pdf-file-label');
+  if (lbl) lbl.textContent = `📄 ${file.name}`;
+
+  setStatus('⏳ Reading DOCX file…');
+
+  try {
+    // mammoth.js converts docx → plain text
+    if (!window.mammoth) {
+      setStatus('❌ DOCX support library (mammoth.js) not loaded. Refresh and try again.', 'err');
+      return;
+    }
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    const rawText = result.value;
+
+    if (!rawText || rawText.trim().length < 50) {
+      setStatus('❌ No readable text found in this DOCX file. It may be empty or image-only.', 'err');
+      return;
+    }
+
+    setStatus(`⏳ Extracted ${rawText.length} characters. Parsing questions…`);
+    pdfParsedQs = parsePdfText(rawText);  // reuse same parser pipeline
+    showParseResults(setStatus, file.name);
+  } catch (err) {
+    setStatus('❌ Error reading DOCX: ' + err.message, 'err');
+  }
+}
+
+// ─── PDF PROCESSING ──────────────────────────────────────────
 async function processPdfFile(file) {
   const status = document.getElementById('pdf-status');
   const setStatus = (msg, type='info') => {
@@ -906,6 +971,11 @@ async function processPdfFile(file) {
     status.style.borderRadius='8px'; status.style.padding='12px';
     status.textContent      = msg;
   };
+
+  // Update drop zone label
+  const lbl = document.getElementById('pdf-file-label');
+  if (lbl) lbl.textContent = `📄 ${file.name}`;
+
   setStatus('⏳ Parsing PDF… (this may take a moment for large files)');
 
   try {
@@ -913,15 +983,12 @@ async function processPdfFile(file) {
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-    // Extract text page-by-page, preserving line structure via Y-position grouping
     let fullText = '';
     let totalChars = 0;
     for (let i = 1; i <= pdf.numPages; i++) {
       const page    = await pdf.getPage(i);
       const content = await page.getTextContent();
 
-      // Group text items by Y-position to reconstruct proper lines
-      // This is critical for multi-column layouts like NORCET booklets
       const byY = {};
       for (const item of content.items) {
         if (!item.str || !item.str.trim()) continue;
@@ -930,7 +997,6 @@ async function processPdfFile(file) {
         byY[y].push({ x: item.transform[4], str: item.str });
       }
 
-      // Sort Y descending (top of page first), then X ascending (left to right)
       const lines = Object.keys(byY)
         .sort((a, b) => b - a)
         .map(y => byY[y].sort((a, b) => a.x - b.x).map(it => it.str).join(' '));
@@ -940,7 +1006,6 @@ async function processPdfFile(file) {
       fullText += pageText + '\n';
     }
 
-    // Detect scanned / image-only PDFs early
     const avgCharsPerPage = totalChars / pdf.numPages;
     if (avgCharsPerPage < 80) {
       setStatus(
@@ -953,57 +1018,64 @@ async function processPdfFile(file) {
     }
 
     setStatus(`⏳ Extracted ${totalChars} characters from ${pdf.numPages} pages. Parsing questions…`);
-
-    // Detect which format this PDF uses and parse accordingly
     pdfParsedQs = parsePdfText(fullText);
-
-    if (pdfParsedQs.length > 0) {
-      const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
-      setStatus(`✅ Found ${pdfParsedQs.length} questions → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`, 'ok');
-
-      const batchInfo = document.getElementById('pdf-batch-info');
-      batchInfo.style.display = '';
-      batchInfo.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-top:8px;">
-        ${Array.from({length:sets},(_,i) => {
-          const from = i*QUESTIONS_PER_SET+1;
-          const to   = Math.min((i+1)*QUESTIONS_PER_SET, pdfParsedQs.length);
-          return `<span style="margin-right:8px;">Set ${i+1}: Q${from}–Q${to}</span>`;
-        }).join('')}
-      </div>`;
-
-      const prev = document.getElementById('pdf-preview');
-      prev.style.display = '';
-      prev.innerHTML = pdfParsedQs.slice(0,3).map((q,i) =>
-        `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:12px;">
-          <strong>Q${i+1}:</strong> ${q.question.substring(0,100)}…
-          <span style="color:#10b981;"> [Ans: ${q.answer}]</span>
-        </div>`
-      ).join('');
-      document.getElementById('import-pdf-btn').disabled = false;
-    } else {
-      setStatus('❌ No questions found. Supported formats: (1) "QUESTION N" with A. B. C. D. and "Answer: X", or (2) numbered questions "558." with a. b. c. d. options and an answer key table at the end.', 'err');
-    }
+    showParseResults(setStatus, file.name);
   } catch (err) {
     setStatus('❌ Error reading PDF: ' + err.message, 'err');
   }
 }
 
+// ─── SHARED: show parse results after PDF or DOCX parsing ────
+function showParseResults(setStatus, filename) {
+  if (pdfParsedQs.length > 0) {
+    const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
+    setStatus(`✅ Found ${pdfParsedQs.length} questions in "${filename}" → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`, 'ok');
+
+    const batchInfo = document.getElementById('pdf-batch-info');
+    batchInfo.style.display = '';
+    batchInfo.innerHTML = `<div style="font-size:12px;color:var(--muted);margin-top:8px;">
+      ${Array.from({length:sets},(_,i) => {
+        const from = i*QUESTIONS_PER_SET+1;
+        const to   = Math.min((i+1)*QUESTIONS_PER_SET, pdfParsedQs.length);
+        return `<span style="margin-right:8px;">Set ${i+1}: Q${from}–Q${to}</span>`;
+      }).join('')}
+    </div>`;
+
+    const prev = document.getElementById('pdf-preview');
+    prev.style.display = '';
+    prev.innerHTML = pdfParsedQs.slice(0,3).map((q,i) =>
+      `<div style="margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:12px;">
+        <strong>Q${i+1}:</strong> ${q.question.substring(0,100)}…
+        <span style="color:#10b981;"> [Ans: ${q.answer}]</span>
+        ${q.explanation ? `<span style="color:#60a5fa;"> ✓ Rationale</span>` : ''}
+      </div>`
+    ).join('');
+    document.getElementById('import-pdf-btn').disabled = false;
+  } else {
+    setStatus(
+      '❌ No questions found. Supported formats:\n' +
+      '① "QUESTION N" → A. B. C. D. → Answer: X (NCLEX classic)\n' +
+      '② Numbered "N." → A. B. C. D. → Answer Key table at end (NORCET booklet)\n' +
+      '③ "N. question" → indented A. B. C. D. → Answer: X. → Rationale: (NCLEX 1000-style)',
+      'err'
+    );
+  }
+}
+
 // ─── NOISE / JUNK LINE FILTER ────────────────────────────────
-// Lines that should be ignored across all PDF formats:
-// watermarks, page numbers, Telegram handles, download notices, headers
 const JUNK_PATTERNS = [
-  /^@\w+/,                              // Telegram handles like @Berlin0145_bot
-  /^lOMoARcPSD/,                        // Studocu document IDs
-  /Downloaded by/i,                      // Studocu download footers
+  /^@\w+/,
+  /^lOMoARcPSD/,
+  /Downloaded by/i,
   /Distribution of this document/i,
   /Want to earn/i,
   /Studocu is not sponsored/i,
-  /^\d{1,3}$/,                          // Standalone page numbers
-  /^NCLEX RN ACTUAL EXAM/i,             // Repeating document headers
+  /^\d{1,3}$/,
+  /^NCLEX RN ACTUAL EXAM/i,
   /^BANK OF REAL QUESTIONS/i,
   /^ANSWERS NCLEX/i,
   /^NORCET \d+ SELECTION DOSE/i,
-  /Granth Shree/i,                       // Publisher watermark
+  /Granth Shree/i,
   /Berlin0145/i,
   /^\s*$/,
 ];
@@ -1025,25 +1097,31 @@ function cleanLines(text) {
 function parsePdfText(rawText) {
   const cleaned = cleanLines(rawText);
 
-  // Try Format 1 first: "QUESTION N" keyword-based (Omega / NCLEX style)
+  // Format 1 first: "QUESTION N" keyword-based (Omega / NCLEX classic)
   const format1Results = parseFormatQuestion(cleaned);
   if (format1Results.length >= 3) return format1Results;
 
-  // Try Format 2: numbered questions "558." with answer key table (NORCET style)
+  // Format 3 (NEW): "N. question\n   A. opt\nAnswer: X.\nRationale: ..." (NCLEX 1000-style)
+  const format3Results = parseFormatNCLEX(cleaned);
+  if (format3Results.length >= 3) return format3Results;
+
+  // Format 2: numbered questions with end answer key (NORCET booklet)
   const format2Results = parseFormatNumbered(cleaned);
   if (format2Results.length >= 3) return format2Results;
 
-  // Fallback: try format 1 on original text (in case junk removal was too aggressive)
+  // Fallbacks on raw text
+  const fallback3 = parseFormatNCLEX(rawText);
+  if (fallback3.length >= 3) return fallback3;
+
   const fallback1 = parseFormatQuestion(rawText);
   if (fallback1.length >= 3) return fallback1;
 
   return [];
 }
 
-// ─── FORMAT 1: "QUESTION N" keyword style (with Explanation) ─
+// ─── FORMAT 1: "QUESTION N" keyword style ────────────────────
 function parseFormatQuestion(text) {
   const qs = [];
-  // Match QUESTION N blocks — stops at next QUESTION N or end of string
   const re = /QUESTION\s+\d+\s*\n([\s\S]*?)(?=QUESTION\s+\d+\s*\n|$)/gi;
   let m;
   while ((m = re.exec(text)) !== null) {
@@ -1053,14 +1131,11 @@ function parseFormatQuestion(text) {
     const opts = { A:'', B:'', C:'', D:'' };
     let answer = '', explanation = '';
     const qLines = [];
-    let phase = 'question'; // question → options → answer → explanation
+    let phase = 'question';
 
     for (const line of lines) {
-      // Option line: "A. text" or "A) text"
       const optM = line.match(/^([A-D])[.)]\s+(.+)/);
-      // Answer line: "Answer: B" or "Answer B"
       const ansM = line.match(/^Answer[:\s]+([A-D])\b/i);
-      // Explanation header
       const expM = /^Explanation[:\s]*/i.test(line);
 
       if (ansM) {
@@ -1082,31 +1157,109 @@ function parseFormatQuestion(text) {
 
     const qText = qLines.join(' ').trim();
     if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
+      qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer, explanation:explanation.trim() });
+    }
+  }
+  return qs;
+}
+
+// ─── FORMAT 3 (NEW): NCLEX 1000-style ────────────────────────
+// Pattern:
+//   N. Question text (possibly multi-line)
+//   (blank)
+//      [bullet?] A. Option text
+//      [bullet?] B. Option text
+//      [bullet?] C. Option text
+//      [bullet?] D. Option text
+//   (blank)
+//   Answer: X. Full answer text
+//   Rationale: Explanation text (possibly multi-line)
+// ─────────────────────────────────────────────────────────────
+function parseFormatNCLEX(text) {
+  // Remove bullet/list characters that PDFs inject before options
+  const BULLET_RE = /[\u2022\u25cf\u2023\u2043\uf0b7\uf0a7\u25aa\u25ab\u2012\u2013\u2014]/g;
+  const cleaned = text.replace(BULLET_RE, '').replace(/\r\n/g, '\n');
+
+  // Split on numbered question boundaries: a line starting with "N. <Capital letter>"
+  // The capital letter after the period ensures we don't split on "e.g.", "vs.", etc.
+  const blocks = cleaned.split(/\n(?=\d{1,4}\.\s+[A-Z"(])/);
+
+  const qs = [];
+  for (const block of blocks) {
+    if (!block.trim()) continue;
+
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l);
+
+    const opts = {};
+    let answer = '';
+    const rationaleLines = [];
+    const qLines = [];
+    let phase = 'q'; // q → opts → answer → rationale
+
+    for (const line of lines) {
+      if (isJunk(line)) continue;
+
+      // Option: "A. text" or "A) text"  (after bullet removal)
+      const optM = line.match(/^([A-D])[.)]\s+"?(.+)/);
+      // Answer: "Answer: B. text" or "Answer: B text"
+      const ansM = line.match(/^Answer:\s*([A-D])[.)"\s]/i);
+      // Rationale / Explanation header
+      const ratM = line.match(/^(?:Rationale|Explanation)[:\s]*(.*)/i);
+
+      if (ratM) {
+        if (phase === 'q' || phase === 'opts') {
+          // We may have missed the answer line — skip this block
+        }
+        phase = 'rationale';
+        if (ratM[1].trim()) rationaleLines.push(ratM[1].trim());
+      } else if (phase === 'rationale') {
+        rationaleLines.push(line);
+      } else if (ansM) {
+        answer = ansM[1].toUpperCase();
+        phase = 'answer';
+      } else if (optM && phase !== 'answer' && phase !== 'rationale') {
+        phase = 'opts';
+        const letter = optM[1].toUpperCase();
+        if (!opts[letter]) opts[letter] = optM[2].replace(/^"/, '').trim();
+      } else if (phase === 'q') {
+        // Strip leading "N. " from the first question line
+        const stripped = line.replace(/^\d{1,4}\.\s+/, '');
+        if (stripped) qLines.push(stripped);
+      } else if (phase === 'opts') {
+        // Continuation of last option (multiline options are rare but possible)
+        const lastLetter = Object.keys(opts).slice(-1)[0];
+        if (lastLetter) opts[lastLetter] += ' ' + line;
+      }
+    }
+
+    const qText = qLines.join(' ').trim();
+    const explanation = rationaleLines.join(' ').trim();
+
+    if (
+      qText &&
+      answer &&
+      opts['A'] && opts['B'] && opts['C'] && opts['D']
+    ) {
       qs.push({
         question:    qText,
-        option_a:    opts.A,
-        option_b:    opts.B,
-        option_c:    opts.C,
-        option_d:    opts.D,
-        answer:      answer,
-        explanation: explanation.trim(),
+        option_a:    opts['A'],
+        option_b:    opts['B'],
+        option_c:    opts['C'],
+        option_d:    opts['D'],
+        answer,
+        explanation,
       });
     }
   }
   return qs;
 }
 
-// ─── FORMAT 2: "558." numbered style with end answer key ─────
-// Used by NORCET booklets: numbered questions, a/b/c/d options,
-// and an "Answer key" table at the very end of the PDF.
+// ─── FORMAT 2: numbered style with end answer key ────────────
 function parseFormatNumbered(text) {
-  // Step 1: Extract the answer key table if present
-  // Format: "1. C  2. B  3. D  ..." or "1.C 2.B 3.D"
   const answerKey = {};
   const answerKeySection = text.match(/Answer\s*[Kk]ey[\s\S]{0,50}\n([\s\S]+)/i);
   if (answerKeySection) {
     const keyText = answerKeySection[1];
-    // Match patterns like "558. B" or "1.C" or "558. B  559. A"
     const keyRe = /(\d+)\.\s*([A-Da-d])/g;
     let km;
     while ((km = keyRe.exec(keyText)) !== null) {
@@ -1114,27 +1267,19 @@ function parseFormatNumbered(text) {
     }
   }
 
-  // Step 2: Split text into question blocks
-  // A block starts with a number like "558." or "558." at start of line
   const blockRe = /^(\d{1,4})\.\s+(.+?)(?=^\d{1,4}\.\s+|\nAnswer\s*[Kk]ey|$)/gms;
   const qs = [];
   let m;
   while ((m = blockRe.exec(text)) !== null) {
     const qNum = parseInt(m[1]);
     const blockText = m[0];
-
-    // Skip if this looks like an answer key entry (too short, just a letter)
     if (blockText.trim().length < 15) continue;
-
     const lines = blockText.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
-    if (lines.length < 3) continue; // Need at least question + 2 options
-
+    if (lines.length < 3) continue;
     const opts = { A:'', B:'', C:'', D:'' };
-    // Option patterns: "a. text" "a) text" "(a) text"
     const optRe = /^[\(\[]?([a-dA-D])[\)\].]\s+(.+)/;
     const qLines = [];
     let foundOpts = false;
-
     for (const line of lines) {
       const optM = line.match(optRe);
       if (optM) {
@@ -1142,33 +1287,18 @@ function parseFormatNumbered(text) {
         const key = optM[1].toUpperCase();
         if (!opts[key]) opts[key] = optM[2].trim();
       } else if (!foundOpts) {
-        // Strip leading question number if present
         const stripped = line.replace(/^\d{1,4}\.\s*/, '');
         if (stripped) qLines.push(stripped);
       }
     }
-
     const qText = qLines.join(' ').trim();
-    // Look up answer from key, or skip if no answer available
     const answer = answerKey[qNum] || '';
-
     if (qText && opts.A && opts.B && opts.C && opts.D && answer) {
-      qs.push({
-        question:    qText,
-        option_a:    opts.A,
-        option_b:    opts.B,
-        option_c:    opts.C,
-        option_d:    opts.D,
-        answer:      answer,
-        explanation: '',
-      });
+      qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer, explanation:'' });
     }
   }
 
-  // If answer key was not found in text, still return questions with a placeholder
-  // (admin can edit later) — but only if we found at least some complete option sets
-  if (qs.length === 0 && answerKey && Object.keys(answerKey).length === 0) {
-    // Try without requiring an answer key — use 'A' as placeholder
+  if (qs.length === 0 && Object.keys(answerKey).length === 0) {
     const blockRe2 = /^(\d{1,4})\.\s+(.+?)(?=^\d{1,4}\.\s+|$)/gms;
     let m2;
     while ((m2 = blockRe2.exec(text)) !== null) {
@@ -1190,10 +1320,10 @@ function parseFormatNumbered(text) {
         qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer:'A', explanation:'' });
     }
   }
-
   return qs;
 }
 
+// ─── IMPORT: create series in Supabase ───────────────────────
 async function importPdfQuestions() {
   const baseName = document.getElementById('pdf-series-name').value.trim();
   if (!baseName)           { showToast('Enter a base name for the test series.','error'); return; }
@@ -1214,10 +1344,9 @@ async function importPdfQuestions() {
     const setNumber = s + 1;
     const seriesName= sets > 1 ? `${baseName} — Set ${setNumber}` : baseName;
 
-    // Create the series
     const { data: newSeries, error: serErr } = await sb.from('test_series').insert({
       name:            seriesName,
-      description:     `Imported from PDF. Set ${setNumber} of ${sets}. Questions ${s*QUESTIONS_PER_SET+1}–${Math.min((s+1)*QUESTIONS_PER_SET, pdfParsedQs.length)}.`,
+      description:     `Imported from file. Set ${setNumber} of ${sets}. Questions ${s*QUESTIONS_PER_SET+1}–${Math.min((s+1)*QUESTIONS_PER_SET, pdfParsedQs.length)}.`,
       duration_minutes:durationMins,
       total_questions: batch.length,
       pass_percentage: passPercent,
@@ -1228,7 +1357,6 @@ async function importPdfQuestions() {
 
     if (serErr) { showToast(`Error creating set ${setNumber}: `+serErr.message,'error'); continue; }
 
-    // Insert questions
     const rows = batch.map((q, i) => ({ ...q, series_id:newSeries.id, order_index:i+1 }));
     const { error: qErr } = await sb.from('questions').insert(rows);
     if (qErr) { showToast(`Error inserting questions for set ${setNumber}: `+qErr.message,'error'); }
