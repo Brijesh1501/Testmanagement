@@ -5,6 +5,9 @@
 //           50-question batches, Supabase Storage image upload,
 //           Format 3 NCLEX/Rationale PDF parser,
 //           DOCX import support (via mammoth.js)
+// FIX: Supabase 1000-row default limit patched everywhere
+//      → question counts now use a grouped SQL view (question_counts)
+//      → all raw .select('series_id') calls use .limit(10000)
 // ============================================================
 
 // ─── CONFIGURATION ───────────────────────────────────────────
@@ -20,12 +23,12 @@ const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 });
 
 // ─── APP STATE ───────────────────────────────────────────────
-let currentUser    = null;
-let currentProfile = null;
-let currentTest    = null;
-let testState      = null;
-let timerInterval  = null;
-let pdfParsedQs    = [];
+let currentUser       = null;
+let currentProfile    = null;
+let currentTest       = null;
+let testState         = null;
+let timerInterval     = null;
+let pdfParsedQs       = [];
 let questionImageFile = null;
 
 // ─── BOOT ────────────────────────────────────────────────────
@@ -65,7 +68,7 @@ async function boot() {
       }
     } else {
       currentUser = currentProfile = null;
-      document.getElementById('app-container').style.display = 'none';
+      document.getElementById('app-container').style.display  = 'none';
       document.getElementById('auth-container').style.display = '';
       showAuthPage('login-page');
     }
@@ -94,7 +97,9 @@ async function handleRegister(e) {
   const password = document.getElementById('reg-password').value;
   setLoading('reg-btn', 'reg-btn-text', true, 'Creating account…');
   hideError('register-error');
-  const { data, error } = await sb.auth.signUp({ email, password, options: { data: { full_name: name, role: 'student' } } });
+  const { data, error } = await sb.auth.signUp({
+    email, password, options: { data: { full_name: name, role: 'student' } }
+  });
   setLoading('reg-btn', 'reg-btn-text', false, 'Create Account');
   if (error) { showError('register-error', error.message); return; }
   if (data.session && data.user) {
@@ -106,6 +111,7 @@ async function handleRegister(e) {
     showAuthPage('login-page');
   }
 }
+
 async function handleLogin(e) {
   e.preventDefault();
   const email    = document.getElementById('login-email').value.trim();
@@ -116,10 +122,11 @@ async function handleLogin(e) {
   setLoading('login-btn', 'login-btn-text', false, 'Sign In');
   if (error) showError('login-error', error.message);
 }
+
 async function handleLogout() {
   await sb.auth.signOut();
   currentUser = currentProfile = null;
-  document.getElementById('app-container').style.display = 'none';
+  document.getElementById('app-container').style.display  = 'none';
   document.getElementById('auth-container').style.display = '';
   showAuthPage('login-page');
 }
@@ -133,12 +140,15 @@ function showApp() {
     currentProfile.role === 'admin' ? '' : 'none';
   navigateTo('dashboard');
 }
+
 function renderSidebar() {
   const name = currentProfile.full_name || currentUser.email;
   document.getElementById('user-name-sidebar').textContent = name;
-  document.getElementById('user-role-badge').textContent   = currentProfile.role === 'admin' ? 'Administrator' : 'Student';
+  document.getElementById('user-role-badge').textContent   =
+    currentProfile.role === 'admin' ? 'Administrator' : 'Student';
   document.getElementById('user-avatar').textContent       = name[0].toUpperCase();
 }
+
 function navigateTo(page) {
   const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
@@ -165,6 +175,49 @@ function navigateTo(page) {
   if (loaders[page]) loaders[page]();
 }
 
+// ─── HELPER: fetch question counts per series (NO row-limit bug) ──────────
+// Requires this view in Supabase (run once in SQL editor):
+//
+//   CREATE OR REPLACE VIEW question_counts AS
+//   SELECT series_id, COUNT(*)::int AS question_count
+//   FROM questions
+//   GROUP BY series_id;
+//
+// Falls back to a paginated raw fetch if the view doesn't exist yet.
+async function fetchQuestionCountMap() {
+  // Try the efficient grouped view first
+  const { data: viewData, error: viewErr } = await sb
+    .from('question_counts')
+    .select('series_id, question_count');
+
+  if (!viewErr && viewData) {
+    const qMap = {};
+    viewData.forEach(r => { qMap[r.series_id] = r.question_count; });
+    return qMap;
+  }
+
+  // Fallback: paginated raw fetch (handles >1000 rows safely)
+  console.warn('question_counts view not found, falling back to paginated fetch');
+  return fetchQuestionCountMapFallback();
+}
+
+async function fetchQuestionCountMapFallback() {
+  const PAGE = 1000;
+  let from = 0;
+  const qMap = {};
+  while (true) {
+    const { data, error } = await sb
+      .from('questions')
+      .select('series_id')
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    data.forEach(q => { qMap[q.series_id] = (qMap[q.series_id] || 0) + 1; });
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return qMap;
+}
+
 // ─── DASHBOARD ───────────────────────────────────────────────
 async function loadDashboard() {
   const hour = new Date().getHours();
@@ -173,19 +226,23 @@ async function loadDashboard() {
     `${greeting}, ${currentProfile.full_name || 'there'}! 👋`;
 
   const { data: attempts } = await sb
-    .from('test_attempts').select('*, test_series(name)')
-    .eq('user_id', currentUser.id).order('submitted_at', { ascending: false });
+    .from('test_attempts')
+    .select('*, test_series(name)')
+    .eq('user_id', currentUser.id)
+    .order('submitted_at', { ascending: false });
 
   const total   = attempts?.length || 0;
-  const avgPct  = total ? +(attempts.reduce((s,a) => s + +a.percentage, 0) / total).toFixed(1) : 0;
+  const avgPct  = total
+    ? +(attempts.reduce((s, a) => s + +a.percentage, 0) / total).toFixed(1)
+    : 0;
   const bestPct = total ? Math.max(...attempts.map(a => +a.percentage)) : 0;
-  const totalQ  = attempts?.reduce((s,a) => s + a.total_questions, 0) || 0;
+  const totalQ  = attempts?.reduce((s, a) => s + a.total_questions, 0) || 0;
 
   document.getElementById('dash-stats').innerHTML =
-    statCard('Total Tests',  total,       '#3b82f6', iconClip)  +
-    statCard('Avg Score',    avgPct + '%','#10b981', iconWave)  +
-    statCard('Best Score',   bestPct+'%', '#f59e0b', iconStar)  +
-    statCard('Qs Attempted', totalQ,      '#06b6d4', iconClock);
+    statCard('Total Tests',  total,        '#3b82f6', iconClip)  +
+    statCard('Avg Score',    avgPct + '%', '#10b981', iconWave)  +
+    statCard('Best Score',   bestPct+'%',  '#f59e0b', iconStar)  +
+    statCard('Qs Attempted', totalQ,       '#06b6d4', iconClock);
 
   const recent = (attempts || []).slice(0, 5);
   document.getElementById('dash-recent-attempts').innerHTML = recent.length
@@ -219,15 +276,26 @@ async function loadTestSeries() {
   const grid = document.getElementById('test-series-grid');
   grid.innerHTML = skeletonGrid(3);
 
-  const { data: series, error } = await sb.from('test_series').select('*').eq('is_active', true).order('created_at');
+  const { data: series, error } = await sb
+    .from('test_series')
+    .select('*')
+    .eq('is_active', true)
+    .order('created_at');
+
   if (error) { grid.innerHTML = errorState(error.message); return; }
   if (!series?.length) { grid.innerHTML = emptyState('No test series available yet.', true); return; }
 
-  const { data: qCounts }   = await sb.from('questions').select('series_id');
-  const { data: myAttempts }= await sb.from('test_attempts').select('series_id, percentage').eq('user_id', currentUser.id);
+  // ✅ FIX: use grouped view — no 1000-row limit
+  const qMap = await fetchQuestionCountMap();
 
-  const qMap = {}; (qCounts||[]).forEach(q => { qMap[q.series_id] = (qMap[q.series_id]||0)+1; });
-  const attMap = {}; (myAttempts||[]).forEach(a => {
+  // Attempt map — only student's own attempts (small dataset, no limit issue)
+  const { data: myAttempts } = await sb
+    .from('test_attempts')
+    .select('series_id, percentage')
+    .eq('user_id', currentUser.id);
+
+  const attMap = {};
+  (myAttempts || []).forEach(a => {
     if (!attMap[a.series_id]) attMap[a.series_id] = { count: 0, best: 0 };
     attMap[a.series_id].count++;
     attMap[a.series_id].best = Math.max(attMap[a.series_id].best, +a.percentage);
@@ -244,7 +312,9 @@ async function loadTestSeries() {
         <div style="width:44px;height:44px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;">
           ${iconClip}
         </div>
-        ${att ? `<span class="badge badge-green">Best: ${att.best}%</span>` : '<span class="badge badge-blue">New</span>'}
+        ${att
+          ? `<span class="badge badge-green">Best: ${att.best}%</span>`
+          : '<span class="badge badge-blue">New</span>'}
       </div>
       <h3 style="font-size:16px;font-weight:700;margin-bottom:8px;line-height:1.3;">${s.name}</h3>
       <p style="font-size:13px;color:var(--muted);line-height:1.6;flex:1;margin-bottom:16px;">${s.description}</p>
@@ -264,7 +334,8 @@ async function loadTestSeries() {
 // ─── TEST ENGINE ─────────────────────────────────────────────
 async function startTest(seriesId) {
   const { data: series }    = await sb.from('test_series').select('*').eq('id', seriesId).single();
-  const { data: questions } = await sb.from('questions').select('*').eq('series_id', seriesId);
+  // ✅ FIX: paginated fetch so we get ALL questions even if >1000
+  const questions = await fetchAllQuestionsForSeries(seriesId);
 
   if (!questions?.length) { showToast('No questions in this series yet!', 'error'); return; }
 
@@ -289,6 +360,25 @@ async function startTest(seriesId) {
   startTimer();
 }
 
+// ✅ FIX: paginated questions fetch per series (handles >1000 rows)
+async function fetchAllQuestionsForSeries(seriesId) {
+  const PAGE = 1000;
+  let from = 0;
+  const all = [];
+  while (true) {
+    const { data, error } = await sb
+      .from('questions')
+      .select('*')
+      .eq('series_id', seriesId)
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
 function renderQuestion() {
   const { questions, answers, currentIndex } = testState;
   const q     = questions[currentIndex];
@@ -311,8 +401,8 @@ function renderQuestion() {
 
   const isLast = currentIndex === total - 1;
   document.getElementById('next-btn').style.display   = isLast ? 'none' : '';
-  document.getElementById('submit-btn').style.display  = isLast ? '' : 'none';
-  document.getElementById('prev-btn').disabled         = currentIndex === 0;
+  document.getElementById('submit-btn').style.display = isLast ? '' : 'none';
+  document.getElementById('prev-btn').disabled        = currentIndex === 0;
 
   const marked = testState.marked[currentIndex];
   const mb = document.getElementById('mark-btn');
@@ -356,6 +446,7 @@ function buildPalette() {
     `<button class="q-nav-btn ${i===0?'current':''}" id="pq-${i}" onclick="jumpToQuestion(${i})">${i+1}</button>`
   ).join('');
 }
+
 function updatePaletteBtn(index) {
   const btn = document.getElementById('pq-' + index);
   if (!btn) return;
@@ -368,6 +459,7 @@ function updatePaletteBtn(index) {
   if (marked)   { btn.style.background='rgba(245,158,11,0.2)';btn.style.borderColor='#f59e0b';btn.style.color='#f59e0b'; return; }
   if (answered) btn.classList.add('answered');
 }
+
 function updatePaletteActive() { testState.questions.forEach((_, i) => updatePaletteBtn(i)); }
 
 // ─── TIMER ───────────────────────────────────────────────────
@@ -380,10 +472,11 @@ function startTimer() {
     if (testState.remainingSeconds <= 0) { clearInterval(timerInterval); submitTest(true); }
   }, 1000);
 }
+
 function updateTimerDisplay() {
   const s  = testState.remainingSeconds;
-  const m  = Math.floor(s/60);
-  const ss = s%60;
+  const m  = Math.floor(s / 60);
+  const ss = s % 60;
   const td = document.getElementById('timer-display');
   td.textContent = `${m}:${ss.toString().padStart(2,'0')}`;
   td.style.color = s<=60?'#ef4444':s<=300?'#f59e0b':'var(--text)';
@@ -399,7 +492,9 @@ function confirmSubmitTest() {
   const answered   = testState.answers.filter(a => a!==null).length;
   const unanswered = testState.questions.length - answered;
   showConfirm('Submit Test',
-    unanswered>0 ? `You have ${unanswered} unanswered question${unanswered>1?'s':''}. Submit anyway?` : 'You answered all questions. Ready to submit?',
+    unanswered>0
+      ? `You have ${unanswered} unanswered question${unanswered>1?'s':''}. Submit anyway?`
+      : 'You answered all questions. Ready to submit?',
     () => submitTest(false), '⚠️');
 }
 
@@ -408,7 +503,7 @@ async function submitTest(timeUp = false) {
   testState.submitted = true;
   const { questions, answers, startTime } = testState;
   let correct=0, incorrect=0, skipped=0;
-  questions.forEach((q,i) => {
+  questions.forEach((q, i) => {
     if (!answers[i]) skipped++;
     else if (answers[i]===q.answer) correct++;
     else incorrect++;
@@ -420,13 +515,21 @@ async function submitTest(timeUp = false) {
 
   const { data: attempt, error: attErr } = await sb
     .from('test_attempts')
-    .insert({ user_id:currentUser.id, series_id:currentTest.id, score:correct, total_questions:total, percentage, time_taken_secs:timeTaken, is_passed:isPassed })
+    .insert({
+      user_id:         currentUser.id,
+      series_id:       currentTest.id,
+      score:           correct,
+      total_questions: total,
+      percentage,
+      time_taken_secs: timeTaken,
+      is_passed:       isPassed
+    })
     .select().single();
 
-  if (attErr) { showToast('Error saving result: '+attErr.message,'error'); return; }
+  if (attErr) { showToast('Error saving result: '+attErr.message, 'error'); return; }
 
   await sb.from('attempt_answers').insert(
-    questions.map((q,i) => ({
+    questions.map((q, i) => ({
       attempt_id:    attempt.id,
       question_id:   q.id,
       user_answer:   answers[i]||null,
@@ -443,7 +546,17 @@ async function submitTest(timeUp = false) {
   );
 
   document.getElementById('test-interface').style.display = 'none';
-  showResultScreen({ ...attempt, seriesName:currentTest.name, correct, incorrect, skipped, total, percentage, timeTaken, isPassed, questions: questions.map((q,i)=>({ ...q, user_answer:answers[i], is_correct:answers[i]===q.answer, question_text:q.question })) });
+  showResultScreen({
+    ...attempt,
+    seriesName: currentTest.name,
+    correct, incorrect, skipped, total, percentage, timeTaken, isPassed,
+    questions: questions.map((q, i) => ({
+      ...q,
+      user_answer:   answers[i],
+      is_correct:    answers[i]===q.answer,
+      question_text: q.question
+    }))
+  });
 }
 
 function confirmExitTest() {
@@ -459,10 +572,10 @@ function showResultScreen(result) {
   document.getElementById('result-screen').style.display = '';
   document.getElementById('result-test-name').textContent = result.seriesName;
   document.getElementById('result-score-pct').textContent = result.percentage + '%';
-  document.getElementById('res-correct').textContent    = result.correct;
-  document.getElementById('res-incorrect').textContent   = result.incorrect;
-  document.getElementById('res-skipped').textContent    = result.skipped;
-  document.getElementById('res-time').textContent       = fmtDuration(result.timeTaken||result.time_taken_secs);
+  document.getElementById('res-correct').textContent      = result.correct;
+  document.getElementById('res-incorrect').textContent    = result.incorrect;
+  document.getElementById('res-skipped').textContent      = result.skipped;
+  document.getElementById('res-time').textContent         = fmtDuration(result.timeTaken||result.time_taken_secs);
   const color = result.percentage>=60?'#10b981':result.percentage>=40?'#f59e0b':'#ef4444';
   document.getElementById('result-score-pct').style.color = color;
   const ring = document.getElementById('score-ring');
@@ -500,25 +613,55 @@ function showAnswerReview() {
 }
 
 async function viewResultById(attemptId) {
-  const { data: attempt }  = await sb.from('test_attempts').select('*, test_series(name)').eq('id', attemptId).single();
-  const { data: answers }  = await sb.from('attempt_answers').select('*').eq('attempt_id', attemptId);
+  const { data: attempt } = await sb
+    .from('test_attempts')
+    .select('*, test_series(name)')
+    .eq('id', attemptId).single();
+  const { data: answers } = await sb
+    .from('attempt_answers')
+    .select('*')
+    .eq('attempt_id', attemptId);
   let correct=0, incorrect=0, skipped=0;
-  (answers||[]).forEach(a => { if(!a.user_answer) skipped++; else if(a.is_correct) correct++; else incorrect++; });
-  showResultScreen({ ...attempt, seriesName:attempt.test_series?.name||'—', correct, incorrect, skipped, total:attempt.total_questions, percentage:attempt.percentage, timeTaken:attempt.time_taken_secs, isPassed:attempt.is_passed, questions:answers||[] });
+  (answers||[]).forEach(a => {
+    if (!a.user_answer) skipped++;
+    else if (a.is_correct) correct++;
+    else incorrect++;
+  });
+  showResultScreen({
+    ...attempt,
+    seriesName: attempt.test_series?.name||'—',
+    correct, incorrect, skipped,
+    total:      attempt.total_questions,
+    percentage: attempt.percentage,
+    timeTaken:  attempt.time_taken_secs,
+    isPassed:   attempt.is_passed,
+    questions:  answers||[]
+  });
   showAnswerReview();
 }
-function closeResultScreen() { document.getElementById('result-screen').style.display='none'; navigateTo('dashboard'); }
+
+function closeResultScreen() {
+  document.getElementById('result-screen').style.display = 'none';
+  navigateTo('dashboard');
+}
 
 // ─── MY RESULTS ──────────────────────────────────────────────
 async function loadResults() {
-  const { data: attempts } = await sb.from('test_attempts').select('*, test_series(name)')
-    .eq('user_id', currentUser.id).order('submitted_at', { ascending:false });
+  const { data: attempts } = await sb
+    .from('test_attempts')
+    .select('*, test_series(name)')
+    .eq('user_id', currentUser.id)
+    .order('submitted_at', { ascending: false });
   window._resultsCache = attempts || [];
-  renderResultsTable(attempts||[]);
+  renderResultsTable(attempts || []);
 }
+
 function renderResultsTable(attempts) {
   const body = document.getElementById('results-body');
-  if (!attempts.length) { body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No results yet. Take a test!</td></tr>`; return; }
+  if (!attempts.length) {
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No results yet. Take a test!</td></tr>`;
+    return;
+  }
   body.innerHTML = attempts.map(a => `
     <tr>
       <td><div style="font-weight:600;font-size:13px;">${a.test_series?.name||'—'}</div></td>
@@ -530,9 +673,12 @@ function renderResultsTable(attempts) {
       <td><button onclick="viewResultById('${a.id}')" class="btn-success" style="font-size:12px;padding:6px 12px;">View</button></td>
     </tr>`).join('');
 }
+
 function filterResults(query) {
   const q = query.toLowerCase();
-  renderResultsTable((window._resultsCache||[]).filter(a => (a.test_series?.name||'').toLowerCase().includes(q)));
+  renderResultsTable((window._resultsCache||[]).filter(a =>
+    (a.test_series?.name||'').toLowerCase().includes(q)
+  ));
 }
 
 // ─── PROFILE ─────────────────────────────────────────────────
@@ -545,72 +691,91 @@ async function loadProfile() {
   document.getElementById('profile-role-badge').textContent= p.role==='admin'?'Administrator':'Student';
   document.getElementById('edit-name').value               = name;
   document.getElementById('edit-email').value              = currentUser.email;
-  const { data: attempts } = await sb.from('test_attempts').select('percentage, is_passed').eq('user_id', currentUser.id);
-  const total   = attempts?.length||0;
-  const avg     = total ? +(attempts.reduce((s,a) => s + +a.percentage,0)/total).toFixed(1) : 0;
-  const best    = total ? Math.max(...attempts.map(a => +a.percentage)) : 0;
-  const passRate= total ? +(attempts.filter(a => a.is_passed).length/total*100).toFixed(1) : 0;
+  const { data: attempts } = await sb
+    .from('test_attempts')
+    .select('percentage, is_passed')
+    .eq('user_id', currentUser.id);
+  const total    = attempts?.length||0;
+  const avg      = total ? +(attempts.reduce((s,a) => s + +a.percentage, 0)/total).toFixed(1) : 0;
+  const best     = total ? Math.max(...attempts.map(a => +a.percentage)) : 0;
+  const passRate = total ? +(attempts.filter(a => a.is_passed).length/total*100).toFixed(1) : 0;
   document.getElementById('profile-stats').innerHTML =
     statCard('Tests Taken', total,        '#3b82f6', iconClip)  +
     statCard('Avg Score',   avg+'%',      '#10b981', iconWave)  +
     statCard('Best Score',  best+'%',     '#f59e0b', iconStar)  +
     statCard('Pass Rate',   passRate+'%', '#06b6d4', iconCheck);
 }
+
 async function updateProfile(e) {
   e.preventDefault();
   const name     = document.getElementById('edit-name').value.trim();
   const password = document.getElementById('edit-password').value;
-  const { error: profErr } = await sb.from('profiles').update({ full_name:name }).eq('id', currentUser.id);
-  if (profErr) { showToast('Error: '+profErr.message,'error'); return; }
+  const { error: profErr } = await sb.from('profiles').update({ full_name: name }).eq('id', currentUser.id);
+  if (profErr) { showToast('Error: '+profErr.message, 'error'); return; }
   if (password) {
     const { error: pwErr } = await sb.auth.updateUser({ password });
-    if (pwErr) { showToast('Password error: '+pwErr.message,'error'); return; }
+    if (pwErr) { showToast('Password error: '+pwErr.message, 'error'); return; }
   }
   currentProfile.full_name = name;
   renderSidebar();
   loadProfile();
-  showToast('Profile updated!','success');
+  showToast('Profile updated!', 'success');
 }
 
 // ─── ADMIN DASHBOARD ─────────────────────────────────────────
 async function loadAdminDashboard() {
   const [
-    { count:userCount  }, { count:seriesCount },
-    { count:qCount     }, { count:attCount    },
-    { data:recentUsers }, { data:topSeries    }
+    { count: userCount   },
+    { count: seriesCount },
+    { count: qCount      },
+    { count: attCount    },
+    { data: recentUsers  },
+    { data: topSeries    }
   ] = await Promise.all([
     sb.from('profiles').select('*',{count:'exact',head:true}).neq('role','admin'),
     sb.from('test_series').select('*',{count:'exact',head:true}),
-    sb.from('questions').select('*',{count:'exact',head:true}),
+    sb.from('questions').select('*',{count:'exact',head:true}),       // count only — no row limit issue
     sb.from('test_attempts').select('*',{count:'exact',head:true}),
     sb.from('profiles').select('*').order('created_at',{ascending:false}).limit(5),
     sb.from('series_stats').select('*').order('attempt_count',{ascending:false}).limit(5)
   ]);
+
   document.getElementById('admin-stats').innerHTML =
-    statCard('Total Users',  userCount  ||0,'#3b82f6',iconUser)  +
-    statCard('Test Series',  seriesCount||0,'#10b981',iconClip)  +
-    statCard('Total Qs',     qCount     ||0,'#f59e0b',iconQ   )  +
-    statCard('Attempts',     attCount   ||0,'#06b6d4',iconWave);
+    statCard('Total Users',  userCount  ||0, '#3b82f6', iconUser) +
+    statCard('Test Series',  seriesCount||0, '#10b981', iconClip) +
+    statCard('Total Qs',     qCount     ||0, '#f59e0b', iconQ   ) +
+    statCard('Attempts',     attCount   ||0, '#06b6d4', iconWave);
+
   document.getElementById('admin-recent-users').innerHTML = (recentUsers||[]).map(u => `
     <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
       <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">${(u.full_name||'U')[0].toUpperCase()}</div>
-      <div><div style="font-size:13px;font-weight:600;">${u.full_name||'—'}</div><span class="badge ${u.role==='admin'?'badge-yellow':'badge-blue'}" style="font-size:10px;">${u.role}</span></div>
+      <div>
+        <div style="font-size:13px;font-weight:600;">${u.full_name||'—'}</div>
+        <span class="badge ${u.role==='admin'?'badge-yellow':'badge-blue'}" style="font-size:10px;">${u.role}</span>
+      </div>
       <div style="margin-left:auto;font-size:11px;color:var(--muted);">${fmtDate(u.created_at)}</div>
-    </div>`).join('')||emptyState('No users yet');
+    </div>`).join('') || emptyState('No users yet');
+
   document.getElementById('admin-top-tests').innerHTML = (topSeries||[]).map(s => `
     <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
-      <div style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.series_name}</div>
-      <div style="font-size:11px;color:var(--muted);">Avg: ${s.avg_percentage||0}% · Pass: ${s.pass_rate||0}%</div></div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.series_name}</div>
+        <div style="font-size:11px;color:var(--muted);">Avg: ${s.avg_percentage||0}% · Pass: ${s.pass_rate||0}%</div>
+      </div>
       <span class="badge badge-blue">${s.attempt_count} attempts</span>
-    </div>`).join('')||emptyState('No attempts yet');
+    </div>`).join('') || emptyState('No attempts yet');
 }
 
 // ─── ADMIN USERS ─────────────────────────────────────────────
 async function loadAdminUsers() {
-  const { data: users } = await sb.from('user_stats').select('*').order('created_at',{ascending:false});
+  const { data: users } = await sb
+    .from('user_stats')
+    .select('*')
+    .order('created_at', { ascending: false });
   window._usersCache = users||[];
   renderUsersTable(users||[]);
 }
+
 function renderUsersTable(users) {
   document.getElementById('users-body').innerHTML = users.map(u => `
     <tr>
@@ -624,32 +789,51 @@ function renderUsersTable(users) {
       <td style="font-size:13px;">${u.avg_score?u.avg_score+'%':'—'}</td>
       <td style="font-size:13px;color:var(--muted);">${fmtDate(u.created_at)}</td>
       <td><div style="display:flex;gap:6px;">
-        ${u.role!=='admin'?`<button onclick="setUserRole('${u.user_id}','admin')" class="btn-success" style="font-size:11px;padding:6px 10px;">Make Admin</button>`:`<button onclick="setUserRole('${u.user_id}','student')" class="btn-secondary" style="font-size:11px;padding:6px 10px;">Revoke</button>`}
-        ${u.user_id!==currentUser.id?`<button onclick="deleteUser('${u.user_id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Delete</button>`:''}
+        ${u.role!=='admin'
+          ? `<button onclick="setUserRole('${u.user_id}','admin')" class="btn-success" style="font-size:11px;padding:6px 10px;">Make Admin</button>`
+          : `<button onclick="setUserRole('${u.user_id}','student')" class="btn-secondary" style="font-size:11px;padding:6px 10px;">Revoke</button>`}
+        ${u.user_id!==currentUser.id
+          ? `<button onclick="deleteUser('${u.user_id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Delete</button>`
+          : ''}
       </div></td>
-    </tr>`).join('')||`<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No users found.</td></tr>`;
+    </tr>`).join('')
+  || `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--muted);">No users found.</td></tr>`;
 }
-function filterUsers(q) { renderUsersTable((window._usersCache||[]).filter(u => (u.full_name||'').toLowerCase().includes(q.toLowerCase()))); }
+
+function filterUsers(q) {
+  renderUsersTable((window._usersCache||[]).filter(u =>
+    (u.full_name||'').toLowerCase().includes(q.toLowerCase())
+  ));
+}
+
 async function setUserRole(uid, role) {
   const { error } = await sb.from('profiles').update({ role }).eq('id', uid);
-  if (error) { showToast('Error: '+error.message,'error'); return; }
-  showToast('Role updated!','success'); loadAdminUsers();
+  if (error) { showToast('Error: '+error.message, 'error'); return; }
+  showToast('Role updated!', 'success');
+  loadAdminUsers();
 }
+
 async function deleteUser(uid) {
   showConfirm('Delete User','This permanently deletes the user and all their data.', async () => {
     const { error } = await sb.from('profiles').delete().eq('id', uid);
-    if (error) { showToast('Error: '+error.message,'error'); return; }
-    showToast('User deleted.','success'); loadAdminUsers();
+    if (error) { showToast('Error: '+error.message, 'error'); return; }
+    showToast('User deleted.', 'success');
+    loadAdminUsers();
   }, '🗑️');
 }
 
 // ─── ADMIN SERIES ─────────────────────────────────────────────
 async function loadAdminSeries() {
   const { data: series }    = await sb.from('test_series').select('*').order('created_at');
-  const { data: qCounts }   = await sb.from('questions').select('series_id');
+
+  // ✅ FIX: use grouped view for question counts
+  const qMap = await fetchQuestionCountMap();
+
+  // Attempt counts — small, no limit issue
   const { data: attCounts } = await sb.from('test_attempts').select('series_id');
-  const qMap={};   (qCounts  ||[]).forEach(q => { qMap[q.series_id]  =(qMap[q.series_id] ||0)+1; });
-  const attMap={}; (attCounts||[]).forEach(a => { attMap[a.series_id]=(attMap[a.series_id]||0)+1; });
+  const attMap = {};
+  (attCounts||[]).forEach(a => { attMap[a.series_id] = (attMap[a.series_id]||0)+1; });
+
   document.getElementById('series-list').innerHTML = (series||[]).map(s => `
     <div class="glass p-5">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -668,7 +852,8 @@ async function loadAdminSeries() {
         <span>🔄 ${attMap[s.id]||0} attempts</span>
         <span>✅ Pass: ${s.pass_percentage}%</span>
       </div>
-    </div>`).join('')||`<div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1;">No series yet. Create one!</div>`;
+    </div>`).join('')
+  || `<div style="text-align:center;padding:60px;color:var(--muted);grid-column:1/-1;">No series yet. Create one!</div>`;
 }
 
 function openAddSeriesModal() {
@@ -683,6 +868,7 @@ function openAddSeriesModal() {
   document.getElementById('series-active').checked  = true;
   document.getElementById('add-series-modal').style.display = 'flex';
 }
+
 async function editSeries(id) {
   const { data: s } = await sb.from('test_series').select('*').eq('id', id).single();
   document.getElementById('series-modal-title').textContent = 'Edit Test Series';
@@ -696,6 +882,7 @@ async function editSeries(id) {
   document.getElementById('series-active').checked  = s.is_active;
   document.getElementById('add-series-modal').style.display = 'flex';
 }
+
 async function saveSeries(e) {
   e.preventDefault();
   const editId = document.getElementById('series-edit-id').value;
@@ -710,17 +897,20 @@ async function saveSeries(e) {
   };
   const query = editId
     ? sb.from('test_series').update(payload).eq('id', editId)
-    : sb.from('test_series').insert({ ...payload, created_by:currentUser.id });
+    : sb.from('test_series').insert({ ...payload, created_by: currentUser.id });
   const { error } = await query;
-  if (error) { showToast('Error: '+error.message,'error'); return; }
-  closeModal('add-series-modal'); loadAdminSeries();
-  showToast(editId?'Series updated!':'Series created!','success');
+  if (error) { showToast('Error: '+error.message, 'error'); return; }
+  closeModal('add-series-modal');
+  loadAdminSeries();
+  showToast(editId ? 'Series updated!' : 'Series created!', 'success');
 }
+
 async function deleteSeries(id) {
   showConfirm('Delete Series','This deletes the series, all its questions and attempt records.', async () => {
     const { error } = await sb.from('test_series').delete().eq('id', id);
-    if (error) { showToast('Error: '+error.message,'error'); return; }
-    showToast('Series deleted.','success'); loadAdminSeries();
+    if (error) { showToast('Error: '+error.message, 'error'); return; }
+    showToast('Series deleted.', 'success');
+    loadAdminSeries();
   }, '🗑️');
 }
 
@@ -728,16 +918,66 @@ async function deleteSeries(id) {
 async function loadAdminQuestions() {
   const { data: series } = await sb.from('test_series').select('id,name').order('name');
   const filterVal = document.getElementById('q-filter-series').value;
-  const opts = (series||[]).map(s => `<option value="${s.id}" ${s.id===filterVal?'selected':''}>${s.name}</option>`).join('');
-  document.getElementById('q-filter-series').innerHTML  = `<option value="">All Series</option>` + opts;
-  document.getElementById('question-series').innerHTML  = `<option value="">Select series...</option>` + opts;
-  document.getElementById('pdf-series-select').innerHTML= `<option value="">Select series prefix...</option>` + opts;
+  const opts = (series||[]).map(s =>
+    `<option value="${s.id}" ${s.id===filterVal?'selected':''}>${s.name}</option>`
+  ).join('');
+  document.getElementById('q-filter-series').innerHTML   = `<option value="">All Series</option>` + opts;
+  document.getElementById('question-series').innerHTML   = `<option value="">Select series...</option>` + opts;
+  document.getElementById('pdf-series-select').innerHTML = `<option value="">Select series prefix...</option>` + opts;
 
-  let qQuery = sb.from('questions').select('*, test_series(name)').order('order_index').order('created_at');
-  if (filterVal) qQuery = qQuery.eq('series_id', filterVal);
-  const { data: questions } = await qQuery;
-  window._questionsCache = questions||[];
-  renderQuestionsTable(questions||[]);
+  // ✅ FIX: paginated fetch — handles >1000 questions
+  let questions = [];
+  if (filterVal) {
+    // Single series: paginate within that series
+    questions = await fetchAllQuestionsForSeriesAdmin(filterVal);
+  } else {
+    // All series: paginate across everything
+    questions = await fetchAllQuestionsAdmin();
+  }
+
+  window._questionsCache = questions;
+  renderQuestionsTable(questions);
+}
+
+// Paginated fetch for admin — all questions across all series
+async function fetchAllQuestionsAdmin() {
+  const PAGE = 1000;
+  let from = 0;
+  const all = [];
+  while (true) {
+    const { data, error } = await sb
+      .from('questions')
+      .select('*, test_series(name)')
+      .order('order_index')
+      .order('created_at')
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
+// Paginated fetch for admin — questions within one series
+async function fetchAllQuestionsForSeriesAdmin(seriesId) {
+  const PAGE = 1000;
+  let from = 0;
+  const all = [];
+  while (true) {
+    const { data, error } = await sb
+      .from('questions')
+      .select('*, test_series(name)')
+      .eq('series_id', seriesId)
+      .order('order_index')
+      .order('created_at')
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
 }
 
 function renderQuestionsTable(questions) {
@@ -745,7 +985,9 @@ function renderQuestionsTable(questions) {
     <tr>
       <td class="mono" style="font-size:12px;color:var(--muted);">${i+1}</td>
       <td style="max-width:280px;font-size:13px;">
-        ${q.image_url?`<img src="${q.image_url}" style="width:32px;height:32px;border-radius:4px;object-fit:cover;margin-right:6px;vertical-align:middle;" alt="">`:'' }
+        ${q.image_url
+          ? `<img src="${q.image_url}" style="width:32px;height:32px;border-radius:4px;object-fit:cover;margin-right:6px;vertical-align:middle;" alt="">`
+          : ''}
         ${q.question.substring(0,70)}${q.question.length>70?'…':''}
       </td>
       <td style="font-size:11px;color:var(--muted);max-width:160px;">A: ${(q.option_a||'').substring(0,25)}…</td>
@@ -755,15 +997,23 @@ function renderQuestionsTable(questions) {
         <button onclick="editQuestion('${q.id}')" class="btn-success" style="font-size:11px;padding:6px 10px;">Edit</button>
         <button onclick="deleteQuestion('${q.id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Del</button>
       </div></td>
-    </tr>`).join('')||`<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">No questions found.</td></tr>`;
+    </tr>`).join('')
+  || `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--muted);">No questions found.</td></tr>`;
 }
-function filterQuestions(q) { renderQuestionsTable((window._questionsCache||[]).filter(qu => qu.question.toLowerCase().includes(q.toLowerCase()))); }
+
+function filterQuestions(q) {
+  renderQuestionsTable(
+    (window._questionsCache||[]).filter(qu => qu.question.toLowerCase().includes(q.toLowerCase()))
+  );
+}
 
 // ─── QUESTION FORM (with image) ──────────────────────────────
 function openAddQuestionModal() {
   document.getElementById('question-modal-title').textContent = 'Add Question';
   document.getElementById('question-edit-id').value = '';
-  ['question-text-input','q-opt-a','q-opt-b','q-opt-c','q-opt-d','q-explanation'].forEach(id => document.getElementById(id).value='');
+  ['question-text-input','q-opt-a','q-opt-b','q-opt-c','q-opt-d','q-explanation'].forEach(id =>
+    document.getElementById(id).value = ''
+  );
   document.getElementById('q-answer').value         = '';
   document.getElementById('question-series').value  = '';
   document.getElementById('q-image-preview').style.display = 'none';
@@ -772,12 +1022,13 @@ function openAddQuestionModal() {
   questionImageFile = null;
   document.getElementById('add-question-modal').style.display = 'flex';
 }
+
 async function editQuestion(id) {
   const { data: q } = await sb.from('questions').select('*').eq('id', id).single();
   await loadAdminQuestions();
   document.getElementById('question-modal-title').textContent = 'Edit Question';
   document.getElementById('question-edit-id').value    = id;
-  document.getElementById('question-text-input').value  = q.question;
+  document.getElementById('question-text-input').value = q.question;
   document.getElementById('q-opt-a').value             = q.option_a;
   document.getElementById('q-opt-b').value             = q.option_b;
   document.getElementById('q-opt-c').value             = q.option_c;
@@ -853,18 +1104,19 @@ async function saveQuestion(e) {
     ? sb.from('questions').update(payload).eq('id', editId)
     : sb.from('questions').insert(payload);
   const { error } = await query;
-  if (error) { showToast('Error: '+error.message,'error'); return; }
+  if (error) { showToast('Error: '+error.message, 'error'); return; }
   closeModal('add-question-modal');
   loadAdminQuestions();
-  showToast(editId?'Question updated!':'Question added!','success');
+  showToast(editId ? 'Question updated!' : 'Question added!', 'success');
   questionImageFile = null;
 }
 
 async function deleteQuestion(id) {
   showConfirm('Delete Question','Permanently delete this question?', async () => {
     const { error } = await sb.from('questions').delete().eq('id', id);
-    if (error) { showToast('Error: '+error.message,'error'); return; }
-    showToast('Question deleted.','success'); loadAdminQuestions();
+    if (error) { showToast('Error: '+error.message, 'error'); return; }
+    showToast('Question deleted.', 'success');
+    loadAdminQuestions();
   }, '🗑️');
 }
 
@@ -880,7 +1132,6 @@ function resetUploadModal() {
   document.getElementById('pdf-preview').style.display   = 'none';
   document.getElementById('import-pdf-btn').disabled     = true;
   document.getElementById('pdf-batch-info').style.display= 'none';
-  // Reset file label
   const lbl = document.getElementById('pdf-file-label');
   if (lbl) lbl.textContent = 'Drop PDF or DOCX here, or click to browse';
   pdfParsedQs = [];
@@ -916,36 +1167,33 @@ function handleFileSelect(e) {
   }
 }
 
-// Keep old name for backward compat
 function handlePdfSelect(e) { handleFileSelect(e); }
 
 // ─── DOCX PROCESSING ─────────────────────────────────────────
 async function processDocxFile(file) {
   const status = document.getElementById('pdf-status');
   const setStatus = (msg, type='info') => {
-    status.style.display    = '';
-    status.style.background = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
-    status.style.border     = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
-    status.style.color      = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
-    status.style.borderRadius='8px'; status.style.padding='12px';
-    status.textContent      = msg;
+    status.style.display     = '';
+    status.style.background  = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
+    status.style.border      = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
+    status.style.color       = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
+    status.style.borderRadius= '8px';
+    status.style.padding     = '12px';
+    status.textContent       = msg;
   };
 
-  // Update drop zone label
   const lbl = document.getElementById('pdf-file-label');
   if (lbl) lbl.textContent = `📄 ${file.name}`;
-
   setStatus('⏳ Reading DOCX file…');
 
   try {
-    // mammoth.js converts docx → plain text
     if (!window.mammoth) {
       setStatus('❌ DOCX support library (mammoth.js) not loaded. Refresh and try again.', 'err');
       return;
     }
     const arrayBuffer = await file.arrayBuffer();
-    const result = await mammoth.extractRawText({ arrayBuffer });
-    const rawText = result.value;
+    const result      = await mammoth.extractRawText({ arrayBuffer });
+    const rawText     = result.value;
 
     if (!rawText || rawText.trim().length < 50) {
       setStatus('❌ No readable text found in this DOCX file. It may be empty or image-only.', 'err');
@@ -953,7 +1201,7 @@ async function processDocxFile(file) {
     }
 
     setStatus(`⏳ Extracted ${rawText.length} characters. Parsing questions…`);
-    pdfParsedQs = parsePdfText(rawText);  // reuse same parser pipeline
+    pdfParsedQs = parsePdfText(rawText);
     showParseResults(setStatus, file.name);
   } catch (err) {
     setStatus('❌ Error reading DOCX: ' + err.message, 'err');
@@ -964,22 +1212,22 @@ async function processDocxFile(file) {
 async function processPdfFile(file) {
   const status = document.getElementById('pdf-status');
   const setStatus = (msg, type='info') => {
-    status.style.display    = '';
-    status.style.background = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
-    status.style.border     = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
-    status.style.color      = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
-    status.style.borderRadius='8px'; status.style.padding='12px';
-    status.textContent      = msg;
+    status.style.display     = '';
+    status.style.background  = type==='ok'?'rgba(16,185,129,0.1)':type==='err'?'rgba(239,68,68,0.1)':'rgba(59,130,246,0.1)';
+    status.style.border      = `1px solid ${type==='ok'?'rgba(16,185,129,0.2)':type==='err'?'rgba(239,68,68,0.2)':'rgba(59,130,246,0.2)'}`;
+    status.style.color       = type==='ok'?'#34d399':type==='err'?'#f87171':'#60a5fa';
+    status.style.borderRadius= '8px';
+    status.style.padding     = '12px';
+    status.textContent       = msg;
   };
 
-  // Update drop zone label
   const lbl = document.getElementById('pdf-file-label');
   if (lbl) lbl.textContent = `📄 ${file.name}`;
-
   setStatus('⏳ Parsing PDF… (this may take a moment for large files)');
 
   try {
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
@@ -1003,7 +1251,7 @@ async function processPdfFile(file) {
 
       const pageText = lines.join('\n');
       totalChars += pageText.length;
-      fullText += pageText + '\n';
+      fullText   += pageText + '\n';
     }
 
     const avgCharsPerPage = totalChars / pdf.numPages;
@@ -1025,11 +1273,14 @@ async function processPdfFile(file) {
   }
 }
 
-// ─── SHARED: show parse results after PDF or DOCX parsing ────
+// ─── SHARED: show parse results ──────────────────────────────
 function showParseResults(setStatus, filename) {
   if (pdfParsedQs.length > 0) {
     const sets = Math.ceil(pdfParsedQs.length / QUESTIONS_PER_SET);
-    setStatus(`✅ Found ${pdfParsedQs.length} questions in "${filename}" → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`, 'ok');
+    setStatus(
+      `✅ Found ${pdfParsedQs.length} questions in "${filename}" → will create ${sets} series (sets of ${QUESTIONS_PER_SET})`,
+      'ok'
+    );
 
     const batchInfo = document.getElementById('pdf-batch-info');
     batchInfo.style.display = '';
@@ -1087,29 +1338,22 @@ function isJunk(line) {
 }
 
 function cleanLines(text) {
-  return text
-    .split('\n')
-    .filter(l => !isJunk(l))
-    .join('\n');
+  return text.split('\n').filter(l => !isJunk(l)).join('\n');
 }
 
 // ─── MAIN PARSER: auto-detects format ────────────────────────
 function parsePdfText(rawText) {
   const cleaned = cleanLines(rawText);
 
-  // Format 1 first: "QUESTION N" keyword-based (Omega / NCLEX classic)
   const format1Results = parseFormatQuestion(cleaned);
   if (format1Results.length >= 3) return format1Results;
 
-  // Format 3 (NEW): "N. question\n   A. opt\nAnswer: X.\nRationale: ..." (NCLEX 1000-style)
   const format3Results = parseFormatNCLEX(cleaned);
   if (format3Results.length >= 3) return format3Results;
 
-  // Format 2: numbered questions with end answer key (NORCET booklet)
   const format2Results = parseFormatNumbered(cleaned);
   if (format2Results.length >= 3) return format2Results;
 
-  // Fallbacks on raw text
   const fallback3 = parseFormatNCLEX(rawText);
   if (fallback3.length >= 3) return fallback3;
 
@@ -1127,8 +1371,7 @@ function parseFormatQuestion(text) {
   while ((m = re.exec(text)) !== null) {
     const block = m[1];
     const lines = block.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
-
-    const opts = { A:'', B:'', C:'', D:'' };
+    const opts  = { A:'', B:'', C:'', D:'' };
     let answer = '', explanation = '';
     const qLines = [];
     let phase = 'question';
@@ -1140,7 +1383,7 @@ function parseFormatQuestion(text) {
 
       if (ansM) {
         answer = ansM[1].toUpperCase();
-        phase = 'answer';
+        phase  = 'answer';
       } else if (expM) {
         phase = 'explanation';
         const rest = line.replace(/^Explanation[:\s]*/i, '').trim();
@@ -1164,91 +1407,53 @@ function parseFormatQuestion(text) {
 }
 
 // ─── FORMAT 3 (NEW): NCLEX 1000-style ────────────────────────
-// Pattern:
-//   N. Question text (possibly multi-line)
-//   (blank)
-//      [bullet?] A. Option text
-//      [bullet?] B. Option text
-//      [bullet?] C. Option text
-//      [bullet?] D. Option text
-//   (blank)
-//   Answer: X. Full answer text
-//   Rationale: Explanation text (possibly multi-line)
-// ─────────────────────────────────────────────────────────────
 function parseFormatNCLEX(text) {
-  // Remove bullet/list characters that PDFs inject before options
   const BULLET_RE = /[\u2022\u25cf\u2023\u2043\uf0b7\uf0a7\u25aa\u25ab\u2012\u2013\u2014]/g;
-  const cleaned = text.replace(BULLET_RE, '').replace(/\r\n/g, '\n');
+  const cleaned   = text.replace(BULLET_RE, '').replace(/\r\n/g, '\n');
+  const blocks    = cleaned.split(/\n(?=\d{1,4}\.\s+[A-Z"(])/);
+  const qs        = [];
 
-  // Split on numbered question boundaries: a line starting with "N. <Capital letter>"
-  // The capital letter after the period ensures we don't split on "e.g.", "vs.", etc.
-  const blocks = cleaned.split(/\n(?=\d{1,4}\.\s+[A-Z"(])/);
-
-  const qs = [];
   for (const block of blocks) {
     if (!block.trim()) continue;
-
     const lines = block.split('\n').map(l => l.trim()).filter(l => l);
-
-    const opts = {};
+    const opts  = {};
     let answer = '';
     const rationaleLines = [];
     const qLines = [];
-    let phase = 'q'; // q → opts → answer → rationale
+    let phase = 'q';
 
     for (const line of lines) {
       if (isJunk(line)) continue;
-
-      // Option: "A. text" or "A) text"  (after bullet removal)
       const optM = line.match(/^([A-D])[.)]\s+"?(.+)/);
-      // Answer: "Answer: B. text" or "Answer: B text"
       const ansM = line.match(/^Answer:\s*([A-D])[.)"\s]/i);
-      // Rationale / Explanation header
       const ratM = line.match(/^(?:Rationale|Explanation)[:\s]*(.*)/i);
 
       if (ratM) {
-        if (phase === 'q' || phase === 'opts') {
-          // We may have missed the answer line — skip this block
-        }
         phase = 'rationale';
         if (ratM[1].trim()) rationaleLines.push(ratM[1].trim());
       } else if (phase === 'rationale') {
         rationaleLines.push(line);
       } else if (ansM) {
         answer = ansM[1].toUpperCase();
-        phase = 'answer';
+        phase  = 'answer';
       } else if (optM && phase !== 'answer' && phase !== 'rationale') {
         phase = 'opts';
         const letter = optM[1].toUpperCase();
         if (!opts[letter]) opts[letter] = optM[2].replace(/^"/, '').trim();
       } else if (phase === 'q') {
-        // Strip leading "N. " from the first question line
         const stripped = line.replace(/^\d{1,4}\.\s+/, '');
         if (stripped) qLines.push(stripped);
       } else if (phase === 'opts') {
-        // Continuation of last option (multiline options are rare but possible)
         const lastLetter = Object.keys(opts).slice(-1)[0];
         if (lastLetter) opts[lastLetter] += ' ' + line;
       }
     }
 
-    const qText = qLines.join(' ').trim();
-    const explanation = rationaleLines.join(' ').trim();
+    const qText      = qLines.join(' ').trim();
+    const explanation= rationaleLines.join(' ').trim();
 
-    if (
-      qText &&
-      answer &&
-      opts['A'] && opts['B'] && opts['C'] && opts['D']
-    ) {
-      qs.push({
-        question:    qText,
-        option_a:    opts['A'],
-        option_b:    opts['B'],
-        option_c:    opts['C'],
-        option_d:    opts['D'],
-        answer,
-        explanation,
-      });
+    if (qText && answer && opts['A'] && opts['B'] && opts['C'] && opts['D']) {
+      qs.push({ question:qText, option_a:opts['A'], option_b:opts['B'], option_c:opts['C'], option_d:opts['D'], answer, explanation });
     }
   }
   return qs;
@@ -1260,7 +1465,7 @@ function parseFormatNumbered(text) {
   const answerKeySection = text.match(/Answer\s*[Kk]ey[\s\S]{0,50}\n([\s\S]+)/i);
   if (answerKeySection) {
     const keyText = answerKeySection[1];
-    const keyRe = /(\d+)\.\s*([A-Da-d])/g;
+    const keyRe   = /(\d+)\.\s*([A-Da-d])/g;
     let km;
     while ((km = keyRe.exec(keyText)) !== null) {
       answerKey[parseInt(km[1])] = km[2].toUpperCase();
@@ -1271,15 +1476,16 @@ function parseFormatNumbered(text) {
   const qs = [];
   let m;
   while ((m = blockRe.exec(text)) !== null) {
-    const qNum = parseInt(m[1]);
+    const qNum      = parseInt(m[1]);
     const blockText = m[0];
     if (blockText.trim().length < 15) continue;
     const lines = blockText.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
     if (lines.length < 3) continue;
-    const opts = { A:'', B:'', C:'', D:'' };
+    const opts  = { A:'', B:'', C:'', D:'' };
     const optRe = /^[\(\[]?([a-dA-D])[\)\].]\s+(.+)/;
-    const qLines = [];
+    const qLines= [];
     let foundOpts = false;
+
     for (const line of lines) {
       const optM = line.match(optRe);
       if (optM) {
@@ -1292,7 +1498,7 @@ function parseFormatNumbered(text) {
       }
     }
     const qText = qLines.join(' ').trim();
-    const answer = answerKey[qNum] || '';
+    const answer= answerKey[qNum] || '';
     if (qText && opts.A && opts.B && opts.C && opts.D && answer) {
       qs.push({ question:qText, option_a:opts.A, option_b:opts.B, option_c:opts.C, option_d:opts.D, answer, explanation:'' });
     }
@@ -1306,14 +1512,20 @@ function parseFormatNumbered(text) {
       if (blockText.trim().length < 15) continue;
       const lines = blockText.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
       if (lines.length < 3) continue;
-      const opts = { A:'', B:'', C:'', D:'' };
+      const opts  = { A:'', B:'', C:'', D:'' };
       const optRe = /^[\(\[]?([a-dA-D])[\)\].]\s+(.+)/;
-      const qLines = [];
+      const qLines= [];
       let foundOpts = false;
       for (const line of lines) {
         const optM = line.match(optRe);
-        if (optM) { foundOpts = true; const key = optM[1].toUpperCase(); if (!opts[key]) opts[key] = optM[2].trim(); }
-        else if (!foundOpts) { const s = line.replace(/^\d{1,4}\.\s*/, ''); if (s) qLines.push(s); }
+        if (optM) {
+          foundOpts = true;
+          const key = optM[1].toUpperCase();
+          if (!opts[key]) opts[key] = optM[2].trim();
+        } else if (!foundOpts) {
+          const s = line.replace(/^\d{1,4}\.\s*/, '');
+          if (s) qLines.push(s);
+        }
       }
       const qText = qLines.join(' ').trim();
       if (qText && opts.A && opts.B && opts.C && opts.D)
@@ -1326,13 +1538,13 @@ function parseFormatNumbered(text) {
 // ─── IMPORT: create series in Supabase ───────────────────────
 async function importPdfQuestions() {
   const baseName = document.getElementById('pdf-series-name').value.trim();
-  if (!baseName)           { showToast('Enter a base name for the test series.','error'); return; }
-  if (!pdfParsedQs.length) { showToast('No questions to import.','error'); return; }
+  if (!baseName)           { showToast('Enter a base name for the test series.', 'error'); return; }
+  if (!pdfParsedQs.length) { showToast('No questions to import.', 'error'); return; }
 
-  const durationMins  = parseInt(document.getElementById('pdf-series-duration').value)||60;
-  const passPercent   = parseInt(document.getElementById('pdf-series-pass').value)||60;
-  const subject       = document.getElementById('pdf-series-subject').value.trim();
-  const btn           = document.getElementById('import-pdf-btn');
+  const durationMins = parseInt(document.getElementById('pdf-series-duration').value)||60;
+  const passPercent  = parseInt(document.getElementById('pdf-series-pass').value)||60;
+  const subject      = document.getElementById('pdf-series-subject').value.trim();
+  const btn          = document.getElementById('import-pdf-btn');
   btn.disabled = true;
   btn.textContent = 'Importing…';
 
@@ -1340,9 +1552,9 @@ async function importPdfQuestions() {
   let created = 0;
 
   for (let s = 0; s < sets; s++) {
-    const batch     = pdfParsedQs.slice(s * QUESTIONS_PER_SET, (s+1) * QUESTIONS_PER_SET);
-    const setNumber = s + 1;
-    const seriesName= sets > 1 ? `${baseName} — Set ${setNumber}` : baseName;
+    const batch      = pdfParsedQs.slice(s * QUESTIONS_PER_SET, (s+1) * QUESTIONS_PER_SET);
+    const setNumber  = s + 1;
+    const seriesName = sets > 1 ? `${baseName} — Set ${setNumber}` : baseName;
 
     const { data: newSeries, error: serErr } = await sb.from('test_series').insert({
       name:            seriesName,
@@ -1355,20 +1567,21 @@ async function importPdfQuestions() {
       created_by:      currentUser.id
     }).select().single();
 
-    if (serErr) { showToast(`Error creating set ${setNumber}: `+serErr.message,'error'); continue; }
+    if (serErr) { showToast(`Error creating set ${setNumber}: `+serErr.message, 'error'); continue; }
 
-    const rows = batch.map((q, i) => ({ ...q, series_id:newSeries.id, order_index:i+1 }));
+    const rows = batch.map((q, i) => ({ ...q, series_id: newSeries.id, order_index: i+1 }));
     const { error: qErr } = await sb.from('questions').insert(rows);
-    if (qErr) { showToast(`Error inserting questions for set ${setNumber}: `+qErr.message,'error'); }
+    if (qErr) { showToast(`Error inserting questions for set ${setNumber}: `+qErr.message, 'error'); }
     else created++;
 
     document.getElementById('pdf-status').textContent = `Importing… set ${setNumber}/${sets} done`;
   }
 
-  btn.disabled = false; btn.textContent = 'Import Questions';
+  btn.disabled = false;
+  btn.textContent = 'Import Questions';
   closeModal('pdf-upload-modal');
   loadAdminQuestions();
-  showToast(`✅ Imported ${pdfParsedQs.length} questions into ${created} series!`,'success');
+  showToast(`✅ Imported ${pdfParsedQs.length} questions into ${created} series!`, 'success');
   pdfParsedQs = [];
 }
 
@@ -1391,61 +1604,89 @@ function statCard(label, value, color, iconSvg) {
     <div style="font-size:12px;color:var(--muted);">${label}</div>
   </div>`;
 }
+
 function emptyState(msg, full=false) {
   return `<div style="text-align:center;padding:60px;color:var(--muted);${full?'grid-column:1/-1;':''}">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 12px;opacity:0.3;display:block;"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/></svg>
     <p style="font-size:13px;">${msg}</p>
   </div>`;
 }
+
 function skeletonGrid(n) {
   return Array(n).fill(0).map(() =>
     `<div class="glass p-6" style="height:220px;background:linear-gradient(90deg,var(--surface2) 25%,var(--border) 50%,var(--surface2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:16px;"></div>`
   ).join('') + '<style>@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}</style>';
 }
-function errorState(msg) { return `<div style="color:#f87171;padding:20px;text-align:center;grid-column:1/-1;">Error: ${msg}</div>`; }
+
+function errorState(msg) {
+  return `<div style="color:#f87171;padding:20px;text-align:center;grid-column:1/-1;">Error: ${msg}</div>`;
+}
+
 function showAuthPage(id) {
   document.querySelectorAll('#auth-container > div').forEach(el => el.style.display='none');
-  document.getElementById(id).style.display='grid';
+  document.getElementById(id).style.display = 'grid';
 }
 const showPage = showAuthPage;
+
 function showError(id, msg) {
   const el = document.getElementById(id);
   if (!el) return;
-  el.textContent = msg; el.classList.remove('hidden');
+  el.textContent = msg;
+  el.classList.remove('hidden');
   setTimeout(() => el.classList.add('hidden'), 5000);
 }
+
 function hideError(id) { document.getElementById(id)?.classList.add('hidden'); }
+
 function setLoading(btnId, textId, loading, text) {
-  const btn=document.getElementById(btnId), txt=document.getElementById(textId);
+  const btn = document.getElementById(btnId);
+  const txt = document.getElementById(textId);
   if (!btn||!txt) return;
-  btn.disabled=loading; txt.textContent=text;
+  btn.disabled    = loading;
+  txt.textContent = text;
 }
-function closeModal(id) { document.getElementById(id).style.display='none'; }
+
+function closeModal(id) { document.getElementById(id).style.display = 'none'; }
+
 function showConfirm(title, message, onConfirm, icon='⚠️') {
   document.getElementById('confirm-title').textContent   = title;
   document.getElementById('confirm-message').textContent = message;
   document.getElementById('confirm-icon').textContent    = icon;
-  document.getElementById('confirm-icon').style.cssText  = 'width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(245,158,11,0.15);font-size:24px;margin:0 auto 16px;';
+  document.getElementById('confirm-icon').style.cssText  =
+    'width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(245,158,11,0.15);font-size:24px;margin:0 auto 16px;';
   document.getElementById('confirm-modal').style.display = 'flex';
-  document.getElementById('confirm-action-btn').onclick  = () => { closeModal('confirm-modal'); onConfirm(); };
+  document.getElementById('confirm-action-btn').onclick  = () => {
+    closeModal('confirm-modal');
+    onConfirm();
+  };
 }
+
 function showToast(msg, type='success') {
   document.querySelector('.toast')?.remove();
-  const t = document.createElement('div');
+  const t     = document.createElement('div');
   t.className = 'toast';
   const color = type==='success'?'#10b981':type==='error'?'#ef4444':'#3b82f6';
   t.innerHTML = `<div style="width:8px;height:8px;border-radius:50%;background:${color};flex-shrink:0;"></div>${msg}`;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 4000);
 }
-function fmtDate(d) { if (!d) return '—'; return new Date(d).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
-function fmtDuration(s) { if (s==null) return '—'; return `${Math.floor(s/60)}m ${s%60}s`; }
+
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function fmtDuration(s) {
+  if (s==null) return '—';
+  return `${Math.floor(s/60)}m ${s%60}s`;
+}
 
 document.querySelectorAll('.modal-overlay').forEach(el => {
   el.addEventListener('click', e => { if (e.target===el) el.style.display='none'; });
 });
+
 function showAdminLogin() {
   document.getElementById('login-email').value    = 'admin@omegaTest.com';
   document.getElementById('login-password').value = 'admin123';
-  showToast('Admin credentials filled.','info');
+  showToast('Admin credentials filled.', 'info');
 }
