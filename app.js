@@ -30,13 +30,38 @@ let questionImageFile = null;  // pending image upload for question form
 window.addEventListener('DOMContentLoaded', boot);
 
 async function boot() {
-  showAuthPage('login-page');
+  // Show a neutral loading state — don't flash login if already logged in
+  document.getElementById('auth-container').style.display = 'none';
+  document.getElementById('app-container').style.display  = 'none';
+
+  // Check for an existing session first (handles new-tab opens)
+  const { data: { session: initialSession } } = await sb.auth.getSession();
+  if (initialSession) {
+    currentUser    = initialSession.user;
+    currentProfile = await fetchProfileWithRetry(currentUser.id);
+    if (currentProfile) {
+      showApp();
+    } else {
+      await sb.auth.signOut();
+      document.getElementById('auth-container').style.display = '';
+      showAuthPage('login-page');
+    }
+  } else {
+    document.getElementById('auth-container').style.display = '';
+    showAuthPage('login-page');
+  }
+
+  // Continue listening for future auth changes (login / logout / token refresh)
   sb.auth.onAuthStateChange(async (event, session) => {
+    // Skip INITIAL_SESSION — already handled above to avoid double-processing
+    if (event === 'INITIAL_SESSION') return;
+
     if (session) {
       currentUser    = session.user;
       currentProfile = await fetchProfileWithRetry(currentUser.id);
-      if (currentProfile) { showApp(); }
-      else {
+      if (currentProfile) {
+        showApp();
+      } else {
         showAuthPage('login-page');
         showError('login-error', 'Account created! Please sign in to continue.');
         await sb.auth.signOut();
@@ -107,8 +132,9 @@ function showApp() {
   document.getElementById('auth-container').style.display = 'none';
   document.getElementById('app-container').style.display  = '';
   renderSidebar();
-  if (currentProfile.role === 'admin')
-    document.getElementById('admin-nav-section').style.display = '';
+  // Always reset first, then show only for admin
+  document.getElementById('admin-nav-section').style.display =
+    currentProfile.role === 'admin' ? '' : 'none';
   navigateTo('dashboard');
 }
 function renderSidebar() {
@@ -118,6 +144,14 @@ function renderSidebar() {
   document.getElementById('user-avatar').textContent       = name[0].toUpperCase();
 }
 function navigateTo(page) {
+  // Block non-admins from accessing admin pages
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions'];
+  if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
+    showToast('Access denied — admin only.', 'error');
+    navigateTo('dashboard');
+    return;
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
