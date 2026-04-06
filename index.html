@@ -7,15 +7,16 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<!-- mammoth.js: converts DOCX → plain text for question parsing -->
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
+<!-- Chart.js for analytics -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg:      #0a0e1a; --surface:#111827; --surface2:#1a2235;
-    --border:  #1e2d45; --accent:#3b82f6;  --accent2:#06b6d4;
-    --success: #10b981; --danger:#ef4444;  --warning:#f59e0b;
-    --text:    #e2e8f0; --muted:#64748b;
+    --bg:#0a0e1a;--surface:#111827;--surface2:#1a2235;
+    --border:#1e2d45;--accent:#3b82f6;--accent2:#06b6d4;
+    --success:#10b981;--danger:#ef4444;--warning:#f59e0b;
+    --text:#e2e8f0;--muted:#64748b;
   }
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
@@ -31,6 +32,8 @@
   .btn-danger:hover{background:rgba(239,68,68,.2);}
   .btn-success{background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
   .btn-success:hover{background:rgba(16,185,129,.2);}
+  .btn-warning{background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
+  .btn-warning:hover{background:rgba(245,158,11,.2);}
   .input-field{background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:'Sora',sans-serif;font-size:14px;padding:12px 16px;width:100%;outline:none;transition:border-color .2s;}
   .input-field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.1);}
   .input-field::placeholder{color:var(--muted);}
@@ -57,10 +60,11 @@
   .stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;transition:all .2s;}
   .stat-card:hover{border-color:var(--accent);transform:translateY(-2px);}
   .badge{padding:3px 10px;border-radius:9999px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;}
-  .badge-blue  {background:rgba(59,130,246,.15); color:#60a5fa;border:1px solid rgba(59,130,246,.3);}
-  .badge-green {background:rgba(16,185,129,.15); color:#34d399;border:1px solid rgba(16,185,129,.3);}
-  .badge-red   {background:rgba(239,68,68,.15);  color:#f87171;border:1px solid rgba(239,68,68,.3);}
-  .badge-yellow{background:rgba(245,158,11,.15); color:#fbbf24;border:1px solid rgba(245,158,11,.3);}
+  .badge-blue{background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3);}
+  .badge-green{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.3);}
+  .badge-red{background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);}
+  .badge-yellow{background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.3);}
+  .badge-purple{background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.3);}
   .data-table{width:100%;border-collapse:collapse;}
   .data-table th{padding:12px 16px;text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border-bottom:1px solid var(--border);}
   .data-table td{padding:14px 16px;font-size:14px;border-bottom:1px solid rgba(30,45,69,.5);vertical-align:middle;}
@@ -76,19 +80,16 @@
   .img-upload-zone{border:2px dashed var(--border);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative;}
   .img-upload-zone:hover{border-color:var(--accent);}
   .img-upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
-
-  /* Format badge pills for the upload modal */
-  .fmt-badge {
-    display: inline-block;
-    padding: 4px 10px;
-    border-radius: 20px;
-    font-size: 11px;
-    font-weight: 600;
-    margin: 2px;
-    border: 1px solid;
-  }
-  .fmt-badge-pdf { background: rgba(239,68,68,.1); color: #f87171; border-color: rgba(239,68,68,.3); }
-  .fmt-badge-docx{ background: rgba(59,130,246,.1); color: #60a5fa; border-color: rgba(59,130,246,.3); }
+  .fmt-badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;margin:2px;border:1px solid;}
+  .fmt-badge-pdf{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.3);}
+  .fmt-badge-docx{background:rgba(59,130,246,.1);color:#60a5fa;border-color:rgba(59,130,246,.3);}
+  /* Analytics chart containers */
+  .chart-box{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;}
+  .chart-title{font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text);}
+  canvas{display:block;}
+  /* Clear response button animation */
+  @keyframes clearPulse{0%{box-shadow:0 0 0 0 rgba(245,158,11,0.4)}70%{box-shadow:0 0 0 8px rgba(245,158,11,0)}100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}}
+  #clear-btn:not([style*="opacity: 0"]):hover{animation:clearPulse 0.5s ease;}
 </style>
 </head>
 <body>
@@ -106,11 +107,11 @@
           <span style="font-size:20px;font-weight:800;letter-spacing:-.02em;">OmegaTest</span>
         </div>
         <h1 style="font-size:44px;font-weight:800;line-height:1.15;letter-spacing:-.03em;margin-bottom:20px;">Master Every<br><span style="background:linear-gradient(135deg,#3b82f6,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;">Examination</span></h1>
-        <p style="color:var(--muted);font-size:16px;line-height:1.7;max-width:380px;">Professional test management platform — timed assessments, instant analytics, and a rich question bank powered by Supabase.</p>
+        <p style="color:var(--muted);font-size:16px;line-height:1.7;max-width:380px;">Professional test management — timed assessments, live analytics, rich question bank powered by Supabase.</p>
       </div>
       <div style="display:flex;gap:40px;">
         <div><div style="font-size:30px;font-weight:800;color:#3b82f6;">50</div><div style="color:var(--muted);font-size:13px;">Qs per Set</div></div>
-        <div><div style="font-size:30px;font-weight:800;color:#06b6d4;">Live</div><div style="color:var(--muted);font-size:13px;">Analytics</div></div>
+        <div><div style="font-size:30px;font-weight:800;color:#06b6d4;">Charts</div><div style="color:var(--muted);font-size:13px;">Analytics</div></div>
         <div><div style="font-size:30px;font-weight:800;color:#10b981;">Admin</div><div style="color:var(--muted);font-size:13px;">Panel</div></div>
       </div>
     </div>
@@ -129,7 +130,6 @@
       </div>
     </div>
   </div>
-
   <!-- REGISTER -->
   <div id="register-page" class="auth-grid" style="display:none;">
     <div class="hidden md:flex flex-col justify-between p-12" style="background:linear-gradient(135deg,rgba(16,185,129,.08),rgba(6,182,212,.04));border-right:1px solid var(--border);">
@@ -157,7 +157,7 @@
           <div><label>Full Name</label><input type="text" id="reg-name" class="input-field" placeholder="Jane Doe" required></div>
           <div><label>Email Address</label><input type="email" id="reg-email" class="input-field" placeholder="you@example.com" required></div>
           <div><label>Password</label><input type="password" id="reg-password" class="input-field" placeholder="Min 6 characters" required minlength="6"></div>
-          <button type="submit" id="reg-btn" class="btn-primary" style="width:100%;padding:14px;justify-content:center;margin-top:4px;"><span id="reg-btn-text">Create Account</span></button>
+          <button type="submit" id="reg-btn" class="btn-primary" style="width:100%;padding:14px;justify-content:center;"><span id="reg-btn-text">Create Account</span></button>
         </form>
         <p style="text-align:center;margin-top:20px;font-size:14px;color:var(--muted);">Have an account? <a href="#" onclick="showPage('login-page')" style="color:var(--accent);font-weight:600;">Sign in →</a></p>
       </div>
@@ -165,7 +165,7 @@
   </div>
 </div>
 
-<!-- ════════════ APP SHELL ════════════ -->
+<!-- ════════════ APP ════════════ -->
 <div id="app-container" style="display:none;">
   <div id="sidebar">
     <div style="padding:20px;border-bottom:1px solid var(--border);">
@@ -179,9 +179,10 @@
     <nav style="padding:16px;flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:2px;">
       <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:0 4px;">Student</div>
       <a class="nav-item active" id="nav-dashboard"  onclick="navigateTo('dashboard')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Dashboard</a>
-      <a class="nav-item" id="nav-tests"    onclick="navigateTo('tests')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>Test Series</a>
-      <a class="nav-item" id="nav-results"  onclick="navigateTo('results')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>My Results</a>
-      <a class="nav-item" id="nav-profile"  onclick="navigateTo('profile')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Profile</a>
+      <a class="nav-item" id="nav-tests"     onclick="navigateTo('tests')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>Test Series</a>
+      <a class="nav-item" id="nav-results"   onclick="navigateTo('results')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>My Results</a>
+      <a class="nav-item" id="nav-analytics" onclick="navigateTo('analytics')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>Analytics</a>
+      <a class="nav-item" id="nav-profile"   onclick="navigateTo('profile')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Profile</a>
       <div id="admin-nav-section" style="display:none;margin-top:8px;">
         <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:0 4px;">Admin</div>
         <a class="nav-item" id="nav-admin-dashboard" onclick="navigateTo('admin-dashboard')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>Admin Panel</a>
@@ -195,7 +196,7 @@
         <div id="user-avatar" style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">U</div>
         <div style="flex:1;min-width:0;">
           <div id="user-name-sidebar" style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">—</div>
-          <div id="user-role-badge"   style="font-size:11px;color:var(--muted);">Student</div>
+          <div id="user-role-badge" style="font-size:11px;color:var(--muted);">Student</div>
         </div>
         <button onclick="handleLogout()" title="Logout" style="background:none;border:none;color:var(--muted);cursor:pointer;padding:4px;display:flex;">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg>
@@ -223,13 +224,13 @@
 
     <!-- TESTS -->
     <div id="page-tests" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Choose a series and begin your timed assessment</p></div>
+      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Choose a series and begin your timed assessment</p></div>
       <div id="test-series-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"></div>
     </div>
 
     <!-- MY RESULTS -->
     <div id="page-results" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">My Results</h1><p style="color:var(--muted);font-size:14px;">Review your past attempts and see detailed answer breakdowns</p></div>
+      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">My Results</h1><p style="color:var(--muted);font-size:14px;">Review your past attempts and detailed answer breakdowns</p></div>
       <div class="glass overflow-hidden">
         <div style="padding:20px;border-bottom:1px solid var(--border);"><input type="text" class="input-field" placeholder="Search by test name…" style="max-width:280px;" oninput="filterResults(this.value)"></div>
         <div style="overflow-x:auto;">
@@ -239,14 +240,62 @@
       </div>
     </div>
 
+    <!-- ✅ NEW: ANALYTICS PAGE -->
+    <div id="page-analytics" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
+        <div>
+          <h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Analytics</h1>
+          <p style="color:var(--muted);font-size:14px;">Deep dive into your performance trends and progress</p>
+        </div>
+        <button onclick="loadAnalytics()" class="btn-secondary" style="font-size:13px;padding:10px 18px;">↻ Refresh</button>
+      </div>
+      <div id="analytics-loading" style="display:none;text-align:center;padding:60px;color:var(--muted);">
+        <div style="font-size:32px;margin-bottom:12px;">📊</div>
+        <p>Loading your analytics…</p>
+      </div>
+      <div id="analytics-content" style="display:none;">
+        <!-- Summary cards -->
+        <div id="analytics-summary" style="margin-bottom:28px;"></div>
+        <!-- Row 1: Score trend + Accuracy donut -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6" style="margin-bottom:24px;">
+          <div class="chart-box md:col-span-2">
+            <div class="chart-title">📈 Score Trend Over Time</div>
+            <div style="height:240px;"><canvas id="chart-score-trend"></canvas></div>
+            <div style="font-size:11px;color:var(--muted);margin-top:8px;">● Green = Pass &nbsp;● Red = Fail &nbsp; — Dashed line = 60% pass threshold</div>
+          </div>
+          <div class="chart-box">
+            <div class="chart-title">🎯 Pass vs Fail</div>
+            <div style="height:200px;"><canvas id="chart-accuracy"></canvas></div>
+          </div>
+        </div>
+        <!-- Row 2: Per-series bar -->
+        <div class="chart-box" style="margin-bottom:24px;">
+          <div class="chart-title">📚 Performance by Test Series</div>
+          <div style="height:280px;overflow-x:auto;"><canvas id="chart-series-bar"></canvas></div>
+        </div>
+        <!-- Row 3: Heatmap + Radar -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-bottom:24px;">
+          <div class="chart-box">
+            <div class="chart-title">🔥 Activity Heatmap (Last 12 Weeks)</div>
+            <div id="analytics-heatmap"></div>
+          </div>
+          <div class="chart-box" id="radar-box">
+            <div class="chart-title">🕸 Subject Radar</div>
+            <div style="height:260px;"><canvas id="chart-subject-radar"></canvas></div>
+            <div style="font-size:11px;color:var(--muted);margin-top:8px;">Requires tests from 2+ different subjects/categories</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- PROFILE -->
     <div id="page-profile" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;">My Profile</h1></div>
+      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;">My Profile</h1></div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div class="glass p-6 text-center">
           <div id="profile-avatar" style="width:80px;height:80px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;margin:0 auto 16px;"></div>
-          <h2 id="profile-name"  style="font-size:18px;font-weight:700;margin-bottom:4px;"></h2>
-          <p  id="profile-email" style="color:var(--muted);font-size:13px;margin-bottom:16px;"></p>
+          <h2 id="profile-name" style="font-size:18px;font-weight:700;margin-bottom:4px;"></h2>
+          <p id="profile-email" style="color:var(--muted);font-size:13px;margin-bottom:16px;"></p>
           <span id="profile-role-badge" class="badge badge-blue"></span>
         </div>
         <div class="glass p-6 md:col-span-2">
@@ -267,7 +316,7 @@
 
     <!-- ADMIN DASHBOARD -->
     <div id="page-admin-dashboard" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Admin Dashboard</h1><p style="color:var(--muted);font-size:14px;">System-wide overview</p></div>
+      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Admin Dashboard</h1><p style="color:var(--muted);font-size:14px;">System-wide overview</p></div>
       <div id="admin-stats" class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:32px;"></div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
         <div class="glass p-6"><h3 style="font-size:15px;font-weight:700;margin-bottom:16px;">Recent Registrations</h3><div id="admin-recent-users"></div></div>
@@ -277,7 +326,7 @@
 
     <!-- ADMIN USERS -->
     <div id="page-admin-users" class="page">
-      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Manage Users</h1><p style="color:var(--muted);font-size:14px;">View, promote, and remove user accounts</p></div>
+      <div style="margin-bottom:32px;"><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Manage Users</h1><p style="color:var(--muted);font-size:14px;">View attempts, reset passwords, promote or remove users</p></div>
       <div class="glass overflow-hidden">
         <div style="padding:20px;border-bottom:1px solid var(--border);"><input type="text" class="input-field" placeholder="Search users…" style="max-width:280px;" oninput="filterUsers(this.value)"></div>
         <div style="overflow-x:auto;">
@@ -290,7 +339,7 @@
     <!-- ADMIN SERIES -->
     <div id="page-admin-series" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
-        <div><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Create and manage test series — rename freely</p></div>
+        <div><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Test Series</h1><p style="color:var(--muted);font-size:14px;">Create and manage test series</p></div>
         <button onclick="openAddSeriesModal()" class="btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>New Series</button>
       </div>
       <div id="series-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
@@ -299,7 +348,7 @@
     <!-- ADMIN QUESTIONS -->
     <div id="page-admin-questions" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
-        <div><h1 style="font-size:26px;font-weight:800;letter-spacing:-.02em;margin-bottom:4px;">Question Bank</h1><p style="color:var(--muted);font-size:14px;">Add, edit and import questions — PDF &amp; DOCX supported</p></div>
+        <div><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Question Bank</h1><p style="color:var(--muted);font-size:14px;">Add, edit and import questions</p></div>
         <div style="display:flex;gap:10px;">
           <button onclick="openPdfUploadModal()" class="btn-secondary">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline;margin-right:6px;"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>Upload PDF / DOCX
@@ -316,8 +365,8 @@
         <tbody id="questions-body"></tbody></table>
       </div>
     </div>
-  </div>
-</div>
+  </div><!-- end main-content -->
+</div><!-- end app-container -->
 
 <!-- ════════════ TEST INTERFACE ════════════ -->
 <div id="test-interface" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:500;overflow-y:auto;">
@@ -353,11 +402,13 @@
             <p id="explanation-text" style="font-size:14px;line-height:1.7;"></p>
           </div>
         </div>
-        <div style="display:flex;gap:10px;margin-top:16px;">
-          <button onclick="prevQuestion()"      class="btn-secondary" id="prev-btn">← Prev</button>
-          <button onclick="markForReview()"     class="btn-secondary" id="mark-btn" style="flex:1;">🔖 Mark for Review</button>
-          <button onclick="nextQuestion()"      class="btn-primary"   id="next-btn">Next →</button>
-          <button onclick="confirmSubmitTest()" class="btn-primary"   id="submit-btn" style="display:none;background:linear-gradient(135deg,#10b981,#06b6d4);">Submit Test ✓</button>
+        <!-- ✅ NEW: Clear Response button added between Prev and Mark -->
+        <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
+          <button onclick="prevQuestion()"         class="btn-secondary" id="prev-btn">← Prev</button>
+          <button onclick="clearCurrentResponse()" class="btn-warning"   id="clear-btn" style="opacity:0.4;" title="Clear your selected answer for this question">✕ Clear</button>
+          <button onclick="markForReview()"         class="btn-secondary" id="mark-btn" style="flex:1;">🔖 Mark for Review</button>
+          <button onclick="nextQuestion()"          class="btn-primary"   id="next-btn">Next →</button>
+          <button onclick="confirmSubmitTest()"     class="btn-primary"   id="submit-btn" style="display:none;background:linear-gradient(135deg,#10b981,#06b6d4);">Submit Test ✓</button>
         </div>
       </div>
       <div class="glass p-5">
@@ -392,13 +443,14 @@
         </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:24px;">
-        <div class="stat-card text-center"><div id="res-correct"   style="font-size:24px;font-weight:800;color:#10b981;"></div><div style="font-size:12px;color:var(--muted);">Correct</div></div>
+        <div class="stat-card text-center"><div id="res-correct" style="font-size:24px;font-weight:800;color:#10b981;"></div><div style="font-size:12px;color:var(--muted);">Correct</div></div>
         <div class="stat-card text-center"><div id="res-incorrect" style="font-size:24px;font-weight:800;color:#ef4444;"></div><div style="font-size:12px;color:var(--muted);">Incorrect</div></div>
-        <div class="stat-card text-center"><div id="res-skipped"   style="font-size:24px;font-weight:800;color:#f59e0b;"></div><div style="font-size:12px;color:var(--muted);">Skipped</div></div>
-        <div class="stat-card text-center"><div id="res-time"      style="font-size:24px;font-weight:800;color:#3b82f6;"></div><div style="font-size:12px;color:var(--muted);">Time Taken</div></div>
+        <div class="stat-card text-center"><div id="res-skipped" style="font-size:24px;font-weight:800;color:#f59e0b;"></div><div style="font-size:12px;color:var(--muted);">Skipped</div></div>
+        <div class="stat-card text-center"><div id="res-time" style="font-size:24px;font-weight:800;color:#3b82f6;"></div><div style="font-size:12px;color:var(--muted);">Time Taken</div></div>
       </div>
-      <div style="display:flex;gap:12px;justify-content:center;">
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <button onclick="showAnswerReview()" class="btn-secondary">Review Answers</button>
+        <button onclick="navigateTo('analytics');closeResultScreen()" class="btn-secondary">📊 View Analytics</button>
         <button onclick="closeResultScreen()" class="btn-primary">Back to Dashboard</button>
       </div>
     </div>
@@ -411,27 +463,27 @@
 
 <!-- ════════════ MODALS ════════════ -->
 
-<!-- Add / Edit Series -->
+<!-- Add/Edit Series -->
 <div id="add-series-modal" class="modal-overlay" style="display:none;">
   <div class="modal">
     <h3 id="series-modal-title" style="font-size:18px;font-weight:700;margin-bottom:20px;">Create Test Series</h3>
     <form onsubmit="saveSeries(event)" style="display:flex;flex-direction:column;gap:16px;">
       <input type="hidden" id="series-edit-id">
-      <div><label>Series Name</label><input type="text" id="series-name" class="input-field" placeholder="Test Series 1" required></div>
-      <div><label>Description</label><textarea id="series-desc" class="input-field" rows="2" placeholder="Brief description…"></textarea></div>
+      <div><label>Series Name</label><input type="text" id="series-name" class="input-field" required></div>
+      <div><label>Description</label><textarea id="series-desc" class="input-field" rows="2"></textarea></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Duration (minutes)</label><input type="number" id="series-duration" class="input-field" value="60" min="5" max="360" required></div>
-        <div><label>Total Questions</label><input type="number" id="series-total-q" class="input-field" value="50" min="1" max="300" required></div>
+        <div><label>Duration (minutes)</label><input type="number" id="series-duration" class="input-field" value="60" min="5" required></div>
+        <div><label>Total Questions</label><input type="number" id="series-total-q" class="input-field" value="50" min="1" required></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div><label>Pass %</label><input type="number" id="series-pass-pct" class="input-field" value="60" min="1" max="100" required></div>
-        <div><label>Category / Subject</label><input type="text" id="series-subject" class="input-field" placeholder="e.g. Nursing, Medicine"></div>
+        <div><label>Category / Subject</label><input type="text" id="series-subject" class="input-field" placeholder="e.g. Nursing"></div>
       </div>
       <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
         <input type="checkbox" id="series-active" checked style="accent-color:var(--accent);width:16px;height:16px;">
         <label for="series-active" style="font-size:14px;text-transform:none;letter-spacing:0;margin-bottom:0;cursor:pointer;">Active — visible to students</label>
       </div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button type="button" onclick="closeModal('add-series-modal')" class="btn-secondary">Cancel</button>
         <button type="submit" class="btn-primary">Save Series</button>
       </div>
@@ -439,7 +491,7 @@
   </div>
 </div>
 
-<!-- Add / Edit Question (with image upload) -->
+<!-- Add/Edit Question -->
 <div id="add-question-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:680px;">
     <h3 id="question-modal-title" style="font-size:18px;font-weight:700;margin-bottom:20px;">Add Question</h3>
@@ -447,30 +499,30 @@
       <input type="hidden" id="question-edit-id">
       <input type="hidden" id="q-current-image-url">
       <div><label>Test Series</label><select id="question-series" class="input-field" required><option value="">Select series…</option></select></div>
-      <div><label>Question Text</label><textarea id="question-text-input" class="input-field" rows="3" required placeholder="Enter the question…"></textarea></div>
+      <div><label>Question Text</label><textarea id="question-text-input" class="input-field" rows="3" required></textarea></div>
       <div>
-        <label>Question Image <span style="color:var(--muted);font-size:10px;">(optional — JPG, PNG, WebP)</span></label>
+        <label>Question Image <span style="color:var(--muted);font-size:10px;">(optional)</span></label>
         <div class="img-upload-zone" onclick="document.getElementById('q-image-input').click()">
           <input type="file" id="q-image-input" accept="image/*" style="display:none;" onchange="handleQuestionImageSelect(event)">
           <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 8px;display:block;color:var(--muted);"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
-          <p style="font-size:13px;color:var(--muted);">Click to upload an image for this question</p>
+          <p style="font-size:13px;color:var(--muted);">Click to upload an image</p>
         </div>
-        <img id="q-image-preview" src="" alt="Preview" style="display:none;max-width:100%;max-height:180px;border-radius:8px;margin-top:10px;object-fit:contain;border:1px solid var(--border);">
-        <button type="button" onclick="removeQuestionImage()" style="margin-top:6px;font-size:12px;color:#ef4444;background:none;border:none;cursor:pointer;padding:0;">✕ Remove image</button>
+        <img id="q-image-preview" src="" alt="Preview" style="display:none;max-width:100%;max-height:180px;border-radius:8px;margin-top:10px;object-fit:contain;">
+        <button type="button" onclick="removeQuestionImage()" style="margin-top:6px;font-size:12px;color:#ef4444;background:none;border:none;cursor:pointer;">✕ Remove image</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div><label>Option A</label><input type="text" id="q-opt-a" class="input-field" required placeholder="Option A"></div>
-        <div><label>Option B</label><input type="text" id="q-opt-b" class="input-field" required placeholder="Option B"></div>
-        <div><label>Option C</label><input type="text" id="q-opt-c" class="input-field" required placeholder="Option C"></div>
-        <div><label>Option D</label><input type="text" id="q-opt-d" class="input-field" required placeholder="Option D"></div>
+        <div><label>Option A</label><input type="text" id="q-opt-a" class="input-field" required></div>
+        <div><label>Option B</label><input type="text" id="q-opt-b" class="input-field" required></div>
+        <div><label>Option C</label><input type="text" id="q-opt-c" class="input-field" required></div>
+        <div><label>Option D</label><input type="text" id="q-opt-d" class="input-field" required></div>
       </div>
       <div><label>Correct Answer</label>
         <select id="q-answer" class="input-field" required>
           <option value="">Select correct option…</option>
           <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
         </select></div>
-      <div><label>Explanation (optional)</label><textarea id="q-explanation" class="input-field" rows="2" placeholder="Why is this the correct answer?"></textarea></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px;">
+      <div><label>Explanation (optional)</label><textarea id="q-explanation" class="input-field" rows="2"></textarea></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button type="button" onclick="closeModal('add-question-modal')" class="btn-secondary">Cancel</button>
         <button type="submit" class="btn-primary">Save Question</button>
       </div>
@@ -478,60 +530,41 @@
   </div>
 </div>
 
-<!-- ════════ PDF / DOCX Upload Modal (Updated) ════════ -->
+<!-- PDF/DOCX Upload Modal -->
 <div id="pdf-upload-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:640px;">
     <h3 style="font-size:18px;font-weight:700;margin-bottom:4px;">Import Questions</h3>
-    <p style="font-size:12px;color:var(--muted);margin-bottom:6px;">
-      Auto-split into sets of 50 — each becomes a separate Test Series
-    </p>
-
-    <!-- Format legend -->
+    <p style="font-size:12px;color:var(--muted);margin-bottom:6px;">Auto-split into sets of 50</p>
     <div style="margin-bottom:20px;line-height:1.9;font-size:12px;color:var(--muted);">
       <span class="fmt-badge fmt-badge-pdf">PDF</span>
       <span class="fmt-badge fmt-badge-docx">DOCX</span>
-      &nbsp;supported &nbsp;·&nbsp;
-      <strong style="color:var(--text);">3 question formats detected automatically:</strong><br>
-      <span style="padding-left:4px;">① <strong>NCLEX Classic</strong> — <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">QUESTION N</code> → A. B. C. D. → <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">Answer: X</code></span><br>
-      <span style="padding-left:4px;">② <strong>NCLEX 1000-style</strong> — <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">N. question</code> → indented A. B. C. D. → <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">Answer: X.</code> → <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">Rationale:</code></span><br>
-      <span style="padding-left:4px;">③ <strong>NORCET Booklet</strong> — <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">558. question</code> → a. b. c. d. → Answer Key table at end</span>
+      &nbsp;·&nbsp;<strong style="color:var(--text);">3 formats detected automatically:</strong><br>
+      ① <strong>NCLEX Classic</strong> — QUESTION N → A. B. C. D. → Answer: X<br>
+      ② <strong>NCLEX 1000</strong> — N. question → A. B. C. D. → Answer: X. → Rationale:<br>
+      ③ <strong>NORCET Booklet</strong> — numbered + Answer Key table at end
     </div>
-
     <div style="display:flex;flex-direction:column;gap:16px;">
-      <!-- Series naming + settings -->
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div style="grid-column:1/-1;">
-          <label>Base Name for Test Series <span style="color:var(--muted);font-size:10px;">(e.g. "NCLEX 1000" → creates "NCLEX 1000 — Set 1", "NCLEX 1000 — Set 2"…)</span></label>
-          <input type="text" id="pdf-series-name" class="input-field" placeholder="NCLEX 1000" required>
-        </div>
-        <div><label>Duration per set (min)</label><input type="number" id="pdf-series-duration" class="input-field" value="60" min="5" max="360"></div>
+        <div style="grid-column:1/-1;"><label>Base Name for Series</label><input type="text" id="pdf-series-name" class="input-field" placeholder="NCLEX 1000" required></div>
+        <div><label>Duration per set (min)</label><input type="number" id="pdf-series-duration" class="input-field" value="60" min="5"></div>
         <div><label>Pass %</label><input type="number" id="pdf-series-pass" class="input-field" value="60" min="1" max="100"></div>
         <div style="grid-column:1/-1;"><label>Category / Subject</label><input type="text" id="pdf-series-subject" class="input-field" placeholder="e.g. NCLEX, Nursing Officer"></div>
-        <!-- Hidden series selector (kept for JS compatibility) -->
         <select id="pdf-series-select" style="display:none;"></select>
       </div>
-
-      <!-- Drop zone — now accepts PDF and DOCX -->
-      <div id="pdf-drop-zone"
-        style="border:2px dashed var(--border);border-radius:12px;padding:36px;text-align:center;cursor:pointer;transition:all .2s;"
+      <div id="pdf-drop-zone" style="border:2px dashed var(--border);border-radius:12px;padding:36px;text-align:center;cursor:pointer;transition:all .2s;"
         onclick="document.getElementById('pdf-file-input').click()"
         ondragover="event.preventDefault();this.style.borderColor='var(--accent)'"
         ondragleave="this.style.borderColor='var(--border)'"
         ondrop="handlePdfDrop(event)">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="margin:0 auto 12px;display:block;color:var(--muted);"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M12 18v-6M9 15l3-3 3 3"/></svg>
         <div id="pdf-file-label" style="font-weight:600;margin-bottom:6px;">Drop PDF or DOCX here, or click to browse</div>
-        <div style="font-size:12px;color:var(--muted);">
-          <span class="fmt-badge fmt-badge-pdf">.pdf</span>
-          <span class="fmt-badge fmt-badge-docx">.docx</span>
-        </div>
+        <div><span class="fmt-badge fmt-badge-pdf">.pdf</span><span class="fmt-badge fmt-badge-docx">.docx</span></div>
         <input type="file" id="pdf-file-input" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="display:none;" onchange="handleFileSelect(event)">
       </div>
-
-      <div id="pdf-status"     style="display:none;white-space:pre-line;"></div>
+      <div id="pdf-status" style="display:none;white-space:pre-line;"></div>
       <div id="pdf-batch-info" style="display:none;"></div>
-      <div id="pdf-preview"    style="display:none;max-height:160px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:12px;"></div>
+      <div id="pdf-preview" style="display:none;max-height:160px;overflow-y:auto;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;font-size:12px;"></div>
     </div>
-
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px;">
       <button onclick="closeModal('pdf-upload-modal')" class="btn-secondary">Cancel</button>
       <button onclick="importPdfQuestions()" class="btn-primary" id="import-pdf-btn" disabled>Import &amp; Create Series</button>
@@ -539,12 +572,52 @@
   </div>
 </div>
 
-<!-- Confirm -->
+<!-- ✅ NEW: Reset Password Modal -->
+<div id="reset-pw-modal" class="modal-overlay" style="display:none;">
+  <div class="modal" style="max-width:420px;">
+    <h3 style="font-size:18px;font-weight:700;margin-bottom:8px;">🔑 Reset Password</h3>
+    <p style="color:var(--muted);font-size:14px;margin-bottom:24px;">Set a new password for <strong id="reset-pw-name" style="color:var(--text);"></strong></p>
+    <input type="hidden" id="reset-pw-uid">
+    <form onsubmit="handleResetPassword(event)" style="display:flex;flex-direction:column;gap:16px;">
+      <div>
+        <label>New Password</label>
+        <input type="password" id="reset-pw-input" class="input-field" placeholder="Minimum 6 characters" minlength="6" required>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ Requires <code>admin_reset_user_password</code> RPC in Supabase. See docs for setup.</div>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button type="button" onclick="closeModal('reset-pw-modal')" class="btn-secondary">Cancel</button>
+        <button type="submit" class="btn-danger">Reset Password</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ✅ NEW: User Detail Modal -->
+<div id="user-detail-modal" class="modal-overlay" style="display:none;">
+  <div class="modal" style="max-width:860px;width:95vw;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <div>
+        <h3 style="font-size:18px;font-weight:700;">👤 <span id="user-detail-name"></span></h3>
+        <p style="color:var(--muted);font-size:13px;margin-top:4px;">All test attempts and performance</p>
+      </div>
+      <button onclick="closeModal('user-detail-modal')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;">✕</button>
+    </div>
+    <!-- Mini score trend chart -->
+    <div class="chart-box" style="margin-bottom:20px;">
+      <div class="chart-title" style="margin-bottom:10px;">Score Trend</div>
+      <div style="height:160px;"><canvas id="user-detail-chart"></canvas></div>
+    </div>
+    <div id="user-detail-loading" style="text-align:center;padding:40px;color:var(--muted);">Loading…</div>
+    <div id="user-detail-content" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
 <div id="confirm-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:400px;text-align:center;">
     <div id="confirm-icon" style="margin:0 auto 16px;"></div>
-    <h3 id="confirm-title"   style="font-size:18px;font-weight:700;margin-bottom:8px;"></h3>
-    <p  id="confirm-message" style="color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6;"></p>
+    <h3 id="confirm-title" style="font-size:18px;font-weight:700;margin-bottom:8px;"></h3>
+    <p id="confirm-message" style="color:var(--muted);font-size:14px;margin-bottom:24px;line-height:1.6;"></p>
     <div style="display:flex;gap:10px;justify-content:center;">
       <button onclick="closeModal('confirm-modal')" class="btn-secondary">Cancel</button>
       <button id="confirm-action-btn" class="btn-primary">Confirm</button>
