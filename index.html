@@ -8,89 +8,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js"></script>
-<!-- Chart.js for analytics -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg:#0a0e1a;--surface:#111827;--surface2:#1a2235;
-    --border:#1e2d45;--accent:#3b82f6;--accent2:#06b6d4;
-    --success:#10b981;--danger:#ef4444;--warning:#f59e0b;
-    --text:#e2e8f0;--muted:#64748b;
-  }
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-  body{font-family:'Sora',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
-  .mono{font-family:'JetBrains Mono',monospace;}
-  body::before{content:'';position:fixed;inset:0;z-index:-1;background:radial-gradient(ellipse at 15% 50%,rgba(59,130,246,.07) 0%,transparent 55%),radial-gradient(ellipse at 85% 15%,rgba(6,182,212,.05) 0%,transparent 50%),var(--bg);}
-  .glass{background:rgba(17,24,39,.85);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:16px;}
-  .btn-primary{background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#fff;border:none;border-radius:10px;font-family:'Sora',sans-serif;font-weight:600;font-size:14px;padding:12px 28px;cursor:pointer;transition:all .2s;letter-spacing:.02em;display:inline-flex;align-items:center;gap:6px;}
-  .btn-primary:hover:not(:disabled){opacity:.9;transform:translateY(-1px);box-shadow:0 8px 25px rgba(59,130,246,.4);}
-  .btn-primary:disabled{opacity:.45;cursor:not-allowed;}
-  .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:10px;font-family:'Sora',sans-serif;font-weight:500;font-size:14px;padding:12px 28px;cursor:pointer;transition:all .2s;}
-  .btn-secondary:hover{border-color:var(--accent);color:var(--accent);}
-  .btn-danger{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
-  .btn-danger:hover{background:rgba(239,68,68,.2);}
-  .btn-success{background:rgba(16,185,129,.1);color:#10b981;border:1px solid rgba(16,185,129,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
-  .btn-success:hover{background:rgba(16,185,129,.2);}
-  .btn-warning{background:rgba(245,158,11,.1);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:8px;font-family:'Sora',sans-serif;font-weight:500;font-size:13px;padding:7px 14px;cursor:pointer;transition:all .2s;}
-  .btn-warning:hover{background:rgba(245,158,11,.2);}
-  .input-field{background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:'Sora',sans-serif;font-size:14px;padding:12px 16px;width:100%;outline:none;transition:border-color .2s;}
-  .input-field:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,130,246,.1);}
-  .input-field::placeholder{color:var(--muted);}
-  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;color:var(--muted);cursor:pointer;transition:all .2s;font-size:14px;font-weight:500;text-decoration:none;border:1px solid transparent;}
-  .nav-item:hover{background:var(--surface2);color:var(--text);}
-  .nav-item.active{background:rgba(59,130,246,.15);color:var(--accent);border-color:rgba(59,130,246,.2);}
-  #sidebar{width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);position:fixed;left:0;top:0;bottom:0;display:flex;flex-direction:column;z-index:100;}
-  #main-content{margin-left:240px;min-height:100vh;padding:32px;max-width:calc(1200px + 240px);}
-  @media(max-width:900px){#sidebar{transform:translateX(-100%);}#main-content{margin-left:0;}}
-  .page{display:none;animation:fadeIn .3s ease;}.page.active{display:block;}
-  @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  .option-btn{display:flex;align-items:flex-start;gap:14px;padding:16px 20px;border-radius:12px;background:var(--surface2);border:1.5px solid var(--border);cursor:pointer;text-align:left;width:100%;font-family:'Sora',sans-serif;color:var(--text);font-size:14px;line-height:1.6;transition:all .2s;}
-  .option-btn:hover:not(.selected){border-color:var(--accent);background:rgba(59,130,246,.08);}
-  .option-btn.selected{border-color:var(--accent);background:rgba(59,130,246,.15);}
-  .option-label{min-width:28px;height:28px;border-radius:50%;background:var(--border);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;font-family:'JetBrains Mono',monospace;flex-shrink:0;margin-top:2px;transition:all .2s;}
-  .q-palette{display:flex;flex-wrap:wrap;gap:6px;}
-  .q-nav-btn{width:36px;height:36px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface2);color:var(--muted);font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;font-family:'JetBrains Mono',monospace;}
-  .q-nav-btn.answered{background:rgba(59,130,246,.2);border-color:var(--accent);color:var(--accent);}
-  .q-nav-btn.current{background:var(--accent);border-color:var(--accent);color:#fff;}
-  .progress-bar{background:linear-gradient(90deg,#3b82f6,#06b6d4);border-radius:9999px;transition:width .3s;}
-  .timer-ring{transition:stroke-dashoffset 1s linear;}
-  .score-ring-track{fill:none;stroke:var(--border);stroke-width:10;}
-  .score-ring-fill{fill:none;stroke-width:10;stroke-linecap:round;transition:stroke-dashoffset 1.5s ease;}
-  .stat-card{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;transition:all .2s;}
-  .stat-card:hover{border-color:var(--accent);transform:translateY(-2px);}
-  .badge{padding:3px 10px;border-radius:9999px;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;}
-  .badge-blue{background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3);}
-  .badge-green{background:rgba(16,185,129,.15);color:#34d399;border:1px solid rgba(16,185,129,.3);}
-  .badge-red{background:rgba(239,68,68,.15);color:#f87171;border:1px solid rgba(239,68,68,.3);}
-  .badge-yellow{background:rgba(245,158,11,.15);color:#fbbf24;border:1px solid rgba(245,158,11,.3);}
-  .badge-purple{background:rgba(139,92,246,.15);color:#a78bfa;border:1px solid rgba(139,92,246,.3);}
-  .data-table{width:100%;border-collapse:collapse;}
-  .data-table th{padding:12px 16px;text-align:left;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border-bottom:1px solid var(--border);}
-  .data-table td{padding:14px 16px;font-size:14px;border-bottom:1px solid rgba(30,45,69,.5);vertical-align:middle;}
-  .data-table tr:hover td{background:rgba(255,255,255,.02);}
-  .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:1000;padding:20px;}
-  .modal{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;}
-  .toast{position:fixed;bottom:24px;right:24px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 20px;font-size:14px;z-index:9999;animation:slideUp .3s ease;max-width:340px;display:flex;align-items:center;gap:10px;box-shadow:0 8px 30px rgba(0,0,0,.4);}
-  @keyframes slideUp{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:none}}
-  .auth-grid{position:fixed;inset:0;display:grid;grid-template-columns:1fr 1fr;}
-  @media(max-width:768px){.auth-grid{grid-template-columns:1fr;}}
-  ::-webkit-scrollbar{width:5px;height:5px;}::-webkit-scrollbar-track{background:var(--surface);}::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}::-webkit-scrollbar-thumb:hover{background:var(--muted);}
-  label{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;}
-  .img-upload-zone{border:2px dashed var(--border);border-radius:10px;padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative;}
-  .img-upload-zone:hover{border-color:var(--accent);}
-  .img-upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;}
-  .fmt-badge{display:inline-block;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600;margin:2px;border:1px solid;}
-  .fmt-badge-pdf{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.3);}
-  .fmt-badge-docx{background:rgba(59,130,246,.1);color:#60a5fa;border-color:rgba(59,130,246,.3);}
-  /* Analytics chart containers */
-  .chart-box{background:var(--surface2);border:1px solid var(--border);border-radius:14px;padding:20px;}
-  .chart-title{font-size:14px;font-weight:700;margin-bottom:16px;color:var(--text);}
-  canvas{display:block;}
-  /* Clear response button animation */
-  @keyframes clearPulse{0%{box-shadow:0 0 0 0 rgba(245,158,11,0.4)}70%{box-shadow:0 0 0 8px rgba(245,158,11,0)}100%{box-shadow:0 0 0 0 rgba(245,158,11,0)}}
-  #clear-btn:not([style*="opacity: 0"]):hover{animation:clearPulse 0.5s ease;}
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 
@@ -240,7 +160,7 @@
       </div>
     </div>
 
-    <!-- ✅ NEW: ANALYTICS PAGE -->
+    <!-- ANALYTICS -->
     <div id="page-analytics" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
         <div>
@@ -250,13 +170,10 @@
         <button onclick="loadAnalytics()" class="btn-secondary" style="font-size:13px;padding:10px 18px;">↻ Refresh</button>
       </div>
       <div id="analytics-loading" style="display:none;text-align:center;padding:60px;color:var(--muted);">
-        <div style="font-size:32px;margin-bottom:12px;">📊</div>
-        <p>Loading your analytics…</p>
+        <div style="font-size:32px;margin-bottom:12px;">📊</div><p>Loading your analytics…</p>
       </div>
       <div id="analytics-content" style="display:none;">
-        <!-- Summary cards -->
         <div id="analytics-summary" style="margin-bottom:28px;"></div>
-        <!-- Row 1: Score trend + Accuracy donut -->
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6" style="margin-bottom:24px;">
           <div class="chart-box md:col-span-2">
             <div class="chart-title">📈 Score Trend Over Time</div>
@@ -268,12 +185,10 @@
             <div style="height:200px;"><canvas id="chart-accuracy"></canvas></div>
           </div>
         </div>
-        <!-- Row 2: Per-series bar -->
         <div class="chart-box" style="margin-bottom:24px;">
           <div class="chart-title">📚 Performance by Test Series</div>
           <div style="height:280px;overflow-x:auto;"><canvas id="chart-series-bar"></canvas></div>
         </div>
-        <!-- Row 3: Heatmap + Radar -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-bottom:24px;">
           <div class="chart-box">
             <div class="chart-title">🔥 Activity Heatmap (Last 12 Weeks)</div>
@@ -365,8 +280,8 @@
         <tbody id="questions-body"></tbody></table>
       </div>
     </div>
-  </div><!-- end main-content -->
-</div><!-- end app-container -->
+  </div>
+</div>
 
 <!-- ════════════ TEST INTERFACE ════════════ -->
 <div id="test-interface" style="display:none;position:fixed;inset:0;background:var(--bg);z-index:500;overflow-y:auto;">
@@ -402,10 +317,9 @@
             <p id="explanation-text" style="font-size:14px;line-height:1.7;"></p>
           </div>
         </div>
-        <!-- ✅ NEW: Clear Response button added between Prev and Mark -->
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
           <button onclick="prevQuestion()"         class="btn-secondary" id="prev-btn">← Prev</button>
-          <button onclick="clearCurrentResponse()" class="btn-warning"   id="clear-btn" style="opacity:0.4;" title="Clear your selected answer for this question">✕ Clear</button>
+          <button onclick="clearCurrentResponse()" class="btn-warning"   id="clear-btn" style="opacity:0.4;" title="Clear your selected answer">✕ Clear</button>
           <button onclick="markForReview()"         class="btn-secondary" id="mark-btn" style="flex:1;">🔖 Mark for Review</button>
           <button onclick="nextQuestion()"          class="btn-primary"   id="next-btn">Next →</button>
           <button onclick="confirmSubmitTest()"     class="btn-primary"   id="submit-btn" style="display:none;background:linear-gradient(135deg,#10b981,#06b6d4);">Submit Test ✓</button>
@@ -443,10 +357,10 @@
         </div>
       </div>
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:24px;">
-        <div class="stat-card text-center"><div id="res-correct" style="font-size:24px;font-weight:800;color:#10b981;"></div><div style="font-size:12px;color:var(--muted);">Correct</div></div>
+        <div class="stat-card text-center"><div id="res-correct"   style="font-size:24px;font-weight:800;color:#10b981;"></div><div style="font-size:12px;color:var(--muted);">Correct</div></div>
         <div class="stat-card text-center"><div id="res-incorrect" style="font-size:24px;font-weight:800;color:#ef4444;"></div><div style="font-size:12px;color:var(--muted);">Incorrect</div></div>
-        <div class="stat-card text-center"><div id="res-skipped" style="font-size:24px;font-weight:800;color:#f59e0b;"></div><div style="font-size:12px;color:var(--muted);">Skipped</div></div>
-        <div class="stat-card text-center"><div id="res-time" style="font-size:24px;font-weight:800;color:#3b82f6;"></div><div style="font-size:12px;color:var(--muted);">Time Taken</div></div>
+        <div class="stat-card text-center"><div id="res-skipped"   style="font-size:24px;font-weight:800;color:#f59e0b;"></div><div style="font-size:12px;color:var(--muted);">Skipped</div></div>
+        <div class="stat-card text-center"><div id="res-time"      style="font-size:24px;font-weight:800;color:#3b82f6;"></div><div style="font-size:12px;color:var(--muted);">Time Taken</div></div>
       </div>
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <button onclick="showAnswerReview()" class="btn-secondary">Review Answers</button>
@@ -520,7 +434,8 @@
         <select id="q-answer" class="input-field" required>
           <option value="">Select correct option…</option>
           <option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option>
-        </select></div>
+        </select>
+      </div>
       <div><label>Explanation (optional)</label><textarea id="q-explanation" class="input-field" rows="2"></textarea></div>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button type="button" onclick="closeModal('add-question-modal')" class="btn-secondary">Cancel</button>
@@ -530,7 +445,7 @@
   </div>
 </div>
 
-<!-- PDF/DOCX Upload Modal -->
+<!-- PDF/DOCX Upload -->
 <div id="pdf-upload-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:640px;">
     <h3 style="font-size:18px;font-weight:700;margin-bottom:4px;">Import Questions</h3>
@@ -572,7 +487,7 @@
   </div>
 </div>
 
-<!-- ✅ NEW: Reset Password Modal -->
+<!-- Reset Password -->
 <div id="reset-pw-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:420px;">
     <h3 style="font-size:18px;font-weight:700;margin-bottom:8px;">🔑 Reset Password</h3>
@@ -582,7 +497,7 @@
       <div>
         <label>New Password</label>
         <input type="password" id="reset-pw-input" class="input-field" placeholder="Minimum 6 characters" minlength="6" required>
-        <div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ Requires <code>admin_reset_user_password</code> RPC in Supabase. See docs for setup.</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px;">⚠️ Requires <code>admin_reset_user_password</code> RPC in Supabase.</div>
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button type="button" onclick="closeModal('reset-pw-modal')" class="btn-secondary">Cancel</button>
@@ -592,7 +507,7 @@
   </div>
 </div>
 
-<!-- ✅ NEW: User Detail Modal -->
+<!-- User Detail -->
 <div id="user-detail-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:860px;width:95vw;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
@@ -602,7 +517,6 @@
       </div>
       <button onclick="closeModal('user-detail-modal')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;">✕</button>
     </div>
-    <!-- Mini score trend chart -->
     <div class="chart-box" style="margin-bottom:20px;">
       <div class="chart-title" style="margin-bottom:10px;">Score Trend</div>
       <div style="height:160px;"><canvas id="user-detail-chart"></canvas></div>
@@ -612,7 +526,7 @@
   </div>
 </div>
 
-<!-- Confirm Modal -->
+<!-- Confirm -->
 <div id="confirm-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:400px;text-align:center;">
     <div id="confirm-icon" style="margin:0 auto 16px;"></div>
@@ -625,6 +539,16 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<!-- ════════ JS — load order matters ════════ -->
+<script src="js/core.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/app.js"></script>
+<script src="js/pages.js"></script>
+<script src="js/test-engine.js"></script>
+<script src="js/analytics.js"></script>
+<script src="js/admin.js"></script>
+<script src="js/questions.js"></script>
+<script src="js/pdf-import.js"></script>
 </body>
 </html>
