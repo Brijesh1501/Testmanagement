@@ -8,6 +8,10 @@ async function loadDashboard() {
   const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
   document.getElementById('dash-greeting').textContent = `${greeting}, ${currentProfile.full_name || 'there'}! 👋`;
 
+  // Set daily challenge date label
+  const dcDateEl = document.getElementById('dc-date-label');
+  if (dcDateEl) dcDateEl.textContent = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'2-digit', month:'short', year:'numeric' });
+
   const { data: attempts } = await sb.from('test_attempts')
     .select('*, test_series(name)')
     .eq('user_id', currentUser.id)
@@ -49,6 +53,86 @@ async function loadDashboard() {
           </div>`).join('')}
       </div>`;
   }
+
+  // Load daily challenge widget — runs async in background
+  loadDailyChallengeWidget();
+  checkDCNavBadge();
+}
+
+// ─── Check if today's challenge is pending (nav dot) ──────────
+async function checkDCNavBadge() {
+  const badge = document.getElementById('dc-nav-badge');
+  if (!badge) return;
+  const today = new Date().toLocaleDateString('en-CA');
+  const { data: challenge } = await sb.from('daily_challenges').select('id').eq('challenge_date', today).eq('is_active', true).single();
+  if (!challenge) return;
+  const { data: attempt } = await sb.from('daily_challenge_attempts').select('id').eq('challenge_id', challenge.id).eq('user_id', currentUser.id).single();
+  badge.style.display = attempt ? 'none' : '';
+}
+
+// ─── Daily Challenge full page (student) ─────────────────────
+async function loadDailyChallengeFullPage() {
+  // Reuse widget in page slot
+  const pageWidget = document.getElementById('dc-page-widget');
+  if (pageWidget) {
+    pageWidget.innerHTML = `<div style="color:var(--muted);font-size:13px;">Loading…</div>`;
+    // Temporarily swap target for widget loader
+    const orig = document.getElementById('daily-challenge-widget');
+    // Clone approach: render into dc-page-widget
+    await loadDailyChallengeWidgetInto('dc-page-widget');
+  }
+
+  // Streak
+  const streak = await loadStudentStreak();
+  const sv = document.getElementById('dc-page-streak-val');
+  if (sv) sv.textContent = streak;
+
+  // History
+  const histEl = document.getElementById('dc-history-list');
+  if (!histEl) return;
+  const { data: attempts } = await sb
+    .from('daily_challenge_attempts')
+    .select('*, daily_challenges(title, challenge_date, topics)')
+    .eq('user_id', currentUser.id)
+    .order('submitted_at', { ascending: false })
+    .limit(20);
+
+  if (!attempts || !attempts.length) {
+    histEl.innerHTML = `<div style="color:var(--muted);font-size:13px;text-align:center;padding:24px 0;">No challenges attempted yet.</div>`;
+    return;
+  }
+
+  histEl.innerHTML = attempts.map(a => {
+    const pct   = +a.percentage;
+    const color = pct >= 70 ? '#10b981' : pct >= 50 ? '#f59e0b' : '#ef4444';
+    const ch    = a.daily_challenges;
+    return `
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);">
+      <div style="width:44px;height:44px;border-radius:10px;background:${pct >= 70 ? 'rgba(16,185,129,.15)' : pct >= 50 ? 'rgba(245,158,11,.15)' : 'rgba(239,68,68,.15)'};display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:${color};flex-shrink:0;">${pct}%</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;">${ch?.title || 'Daily Challenge'}</div>
+        <div style="font-size:11px;color:var(--muted);">${fmtDate(a.submitted_at)} · ${a.score}/${a.total_questions} correct · ${(ch?.topics||[]).slice(0,2).join(', ')}</div>
+      </div>
+      <button onclick="viewDailyChallengeReview('${a.id}')" class="btn-secondary" style="font-size:11px;padding:6px 12px;">Review</button>
+    </div>`;
+  }).join('');
+}
+
+// Helper: render widget into any element id
+async function loadDailyChallengeWidgetInto(targetId) {
+  const container = document.getElementById(targetId);
+  if (!container) return;
+  const today = new Date().toLocaleDateString('en-CA');
+  const { data: challenge } = await sb.from('daily_challenges').select('*').eq('challenge_date', today).eq('is_active', true).single();
+  if (!challenge) {
+    container.innerHTML = `<div style="text-align:center;padding:32px 0;color:var(--muted);"><div style="font-size:36px;margin-bottom:12px;">🌅</div><div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px;">No Challenge Today</div><div style="font-size:12px;">Check back later — an admin will set today's challenge soon.</div></div>`;
+    return;
+  }
+  const { data: attempt } = await sb.from('daily_challenge_attempts').select('*').eq('challenge_id', challenge.id).eq('user_id', currentUser.id).single();
+  if (attempt) { renderDailyChallengeResult(container, attempt, challenge); return; }
+  const { data: questions } = await sb.from('daily_challenge_questions').select('*').eq('challenge_id', challenge.id).order('order_index');
+  if (!questions || !questions.length) { container.innerHTML = `<div style="color:var(--muted);font-size:13px;">Challenge has no questions yet.</div>`; return; }
+  renderDailyChallengeStart(container, challenge, questions);
 }
 
 // ─── TEST SERIES LIST (Student) ───────────────────────────────

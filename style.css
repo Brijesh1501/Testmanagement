@@ -505,3 +505,90 @@ canvas       { display: block; }
   border-radius: 50%;
   animation: pulse-dot 2s infinite;
 }
+
+/* ── Daily Challenge ────────────────────────────────────────── */
+.dc-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--surface2);
+  border: 1.5px solid var(--border);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: 'Sora', sans-serif;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.6;
+  transition: all .2s;
+}
+.dc-option:hover:not(.selected) {
+  border-color: #f59e0b;
+  background: rgba(245,158,11,.07);
+}
+.dc-option.selected {
+  border-color: #f59e0b;
+  background: rgba(245,158,11,.12);
+}
+.dc-option-label {
+  min-width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', monospace;
+  flex-shrink: 0;
+  margin-top: 2px;
+  transition: all .2s;
+}
+
+/* Palette buttons for daily challenge */
+.dc-pal-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  border: 1.5px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+  font-family: 'JetBrains Mono', monospace;
+}
+.dc-pal-btn.answered {
+  background: rgba(245,158,11,.2);
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+.dc-pal-btn.current {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  color: #000;
+}
+
+/* Generate status row */
+.dc-gen-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* DC modal fullscreen on mobile */
+@media (max-width: 700px) {
+  #dc-modal > div {
+    grid-template-columns: 1fr !important;
+  }
+  #dc-modal > div > div:last-child {
+    display: none;
+  }
+}

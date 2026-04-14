@@ -33,7 +33,7 @@ function closeMobileSidebar() {
 }
 
 function navigateTo(page) {
-  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics'];
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics', 'admin-daily-challenge'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
     showToast('Access denied — admin only.', 'error');
     navigateTo('dashboard');
@@ -60,11 +60,13 @@ function navigateTo(page) {
     'results':           loadResults,
     'profile':           loadProfile,
     'analytics':         loadAnalytics,
-    'admin-dashboard':   loadAdminDashboard,
-    'admin-users':       loadAdminUsers,
-    'admin-series':      loadAdminSeries,
-    'admin-questions':   loadAdminQuestions,
-    'admin-analytics':   loadAdminAnalytics,
+    'admin-dashboard':        loadAdminDashboard,
+    'admin-users':            loadAdminUsers,
+    'admin-series':           loadAdminSeries,
+    'admin-questions':        loadAdminQuestions,
+    'admin-analytics':        loadAdminAnalytics,
+    'admin-daily-challenge':  loadAdminDailyChallenge,
+    'daily-challenge':        loadDailyChallengeFullPage,
   };
   if (loaders[page]) loaders[page]();
 }
