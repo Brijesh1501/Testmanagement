@@ -535,7 +535,7 @@ Rules:
           { role: 'user',   content: prompt }
         ],
         temperature: 0.7,
-        max_tokens: 8000,
+        max_tokens: 3000,
       }),
     });
 
@@ -571,10 +571,13 @@ Rules:
 
     if (!valid.length) throw new Error('No valid questions generated');
 
-    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>Saving ${valid.length} questions to database…</span></div>`;
+    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>Saving challenge… (1/2: creating challenge record)</span></div>`;
 
-    // Save to Supabase
-    await saveDailyChallenge({ title, topics, date, count: valid.length, timeLim, difficulty, questions: valid, editId });
+    // Save to Supabase — with progress callback to keep UI alive
+    const updateStatus = (msg) => {
+      statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>${msg}</span></div>`;
+    };
+    await saveDailyChallenge({ title, topics, date, count: valid.length, timeLim, difficulty, questions: valid, editId, onProgress: updateStatus });
 
     statusEl.innerHTML = `<div class="dc-gen-status-row" style="color:#10b981;"><span>✅ ${valid.length} questions saved! Challenge is live for ${date}.</span></div>`;
     showToast(`Daily challenge created with ${valid.length} AI questions!`, 'success');
@@ -593,30 +596,47 @@ Rules:
   }
 }
 
-async function saveDailyChallenge({ title, topics, date, count, timeLim, difficulty, questions, editId }) {
+// Wraps a promise with a timeout so Supabase hangs don't freeze the UI forever
+function withTimeout(promise, ms, label) {
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s: ${label}. Check Supabase RLS policies — the admin user may not have INSERT permission on daily_challenges.`)), ms)
+  );
+  return Promise.race([promise, timeout]);
+}
+
+async function saveDailyChallenge({ title, topics, date, count, timeLim, difficulty, questions, editId, onProgress = () => {} }) {
   let challengeId = editId;
 
   if (editId) {
     // Update existing
-    const { error } = await sb.from('daily_challenges').update({
-      title, topics, challenge_date: date, question_count: questions.length,
-      time_limit_minutes: timeLim, difficulty, is_active: true,
-    }).eq('id', editId);
-    if (error) throw new Error('DB update failed: ' + error.message);
+    const { error } = await withTimeout(
+      sb.from('daily_challenges').update({
+        title, topics, challenge_date: date, question_count: questions.length,
+        time_limit_minutes: timeLim, difficulty, is_active: true,
+      }).eq('id', editId),
+      10000, 'updating daily_challenges'
+    );
+    if (error) throw new Error('DB update failed: ' + error.message + '. Check Supabase RLS policies.');
     // Delete old questions
-    await sb.from('daily_challenge_questions').delete().eq('challenge_id', editId);
+    await withTimeout(
+      sb.from('daily_challenge_questions').delete().eq('challenge_id', editId),
+      10000, 'deleting old questions'
+    );
   } else {
     // Insert new
-    const { data, error } = await sb.from('daily_challenges').insert({
-      title, topics, challenge_date: date, question_count: questions.length,
-      time_limit_minutes: timeLim, difficulty, is_active: true,
-      created_by: currentUser.id,
-    }).select().single();
-    if (error) throw new Error('DB insert failed: ' + error.message);
+    const { data, error } = await withTimeout(
+      sb.from('daily_challenges').insert({
+        title, topics, challenge_date: date, question_count: questions.length,
+        time_limit_minutes: timeLim, difficulty, is_active: true,
+        created_by: currentUser?.id,
+      }).select().single(),
+      10000, 'inserting daily_challenges'
+    );
+    if (error) throw new Error('DB insert failed: ' + error.message + '. Check Supabase RLS policies — admin needs INSERT on daily_challenges.');
     challengeId = data.id;
   }
 
-  // Insert questions
+  // Insert questions in batches of 10 to avoid payload limits
   const rows = questions.map((q, i) => ({
     challenge_id:   challengeId,
     question_text:  q.question_text,
@@ -630,8 +650,17 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
     order_index:    i,
   }));
 
-  const { error: qErr } = await sb.from('daily_challenge_questions').insert(rows);
-  if (qErr) throw new Error('Question insert failed: ' + qErr.message);
+  // Batch insert in chunks of 10
+  const chunkSize = 10;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    onProgress(`Saving questions… (${Math.min(i + chunkSize, rows.length)}/${rows.length})`);
+    const { error: qErr } = await withTimeout(
+      sb.from('daily_challenge_questions').insert(chunk),
+      10000, `inserting questions batch ${Math.floor(i/chunkSize)+1}`
+    );
+    if (qErr) throw new Error('Question insert failed: ' + qErr.message + '. Check Supabase RLS policies on daily_challenge_questions.');
+  }
 }
 
 async function deleteDailyChallenge(id) {
