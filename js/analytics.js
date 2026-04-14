@@ -27,6 +27,9 @@ async function loadAnalytics() {
   renderSeriesBarChart(attempts);
   renderWeeklyHeatmap(attempts);
   renderSubjectRadar(attempts);
+  renderWeakTopicDetector(attempts);
+  renderTimePerQuestionAnalysis(attempts);
+  renderComparisonChart(attempts);
 }
 
 // ─── Summary cards ───────────────────────────────────────────
@@ -296,4 +299,154 @@ function renderSubjectRadar(attempts) {
       }
     }
   });
+}
+
+// ─── Weak Topic Detector ──────────────────────────────────────
+function renderWeakTopicDetector(attempts) {
+  const container = document.getElementById('weak-topic-content');
+  if (!container) return;
+
+  // Group by series name and compute accuracy
+  const seriesPerf = {};
+  attempts.forEach(a => {
+    const key = a.test_series?.name || 'Unknown';
+    if (!seriesPerf[key]) seriesPerf[key] = { scores: [], subject: a.test_series?.subject || '' };
+    seriesPerf[key].scores.push(+a.percentage);
+  });
+
+  const seriesList = Object.entries(seriesPerf).map(([name, d]) => {
+    const avg = +(d.scores.reduce((s, v) => s + v, 0) / d.scores.length).toFixed(1);
+    const attempts_count = d.scores.length;
+    const trend = d.scores.length > 1
+      ? d.scores[d.scores.length - 1] - d.scores[0]
+      : 0;
+    return { name, avg, attempts_count, trend, subject: d.subject };
+  }).sort((a, b) => a.avg - b.avg);
+
+  const weak   = seriesList.filter(s => s.avg < 60);
+  const medium = seriesList.filter(s => s.avg >= 60 && s.avg < 75);
+  const strong = seriesList.filter(s => s.avg >= 75);
+
+  if (!weak.length && !medium.length) {
+    container.innerHTML = `<div style="color:#10b981;font-size:14px;padding:12px 0;">✅ Excellent! You're performing well across all series (avg ≥ 75%).</div>`;
+    return;
+  }
+
+  const renderGroup = (items, color, icon, label) => items.map(s => `
+    <div style="padding:12px 0;border-bottom:1px solid rgba(30,45,69,.5);">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+        <div style="font-size:13px;font-weight:600;">${icon} ${s.name}</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          ${s.subject ? `<span class="badge badge-blue" style="font-size:10px;">${s.subject}</span>` : ''}
+          <span style="font-size:13px;font-weight:700;color:${color};">${s.avg}%</span>
+          ${s.trend !== 0 ? `<span style="font-size:11px;color:${s.trend > 0 ? '#10b981' : '#ef4444'};">${s.trend > 0 ? '↑' : '↓'}${Math.abs(s.trend).toFixed(1)}%</span>` : ''}
+        </div>
+      </div>
+      <div class="weak-topic-bar"><div class="weak-topic-fill" style="width:${s.avg}%;background:${color};"></div></div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px;">${s.attempts_count} attempt${s.attempts_count > 1 ? 's' : ''} · ${label}</div>
+    </div>`).join('');
+
+  container.innerHTML = `
+    ${weak.length ? `<div style="margin-bottom:16px;"><div style="font-size:12px;font-weight:700;color:#ef4444;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">⚠️ Needs Urgent Attention (Below 60%)</div>${renderGroup(weak, '#ef4444', '🔴', 'Focus here first')}</div>` : ''}
+    ${medium.length ? `<div style="margin-bottom:8px;"><div style="font-size:12px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📌 Improvement Needed (60–75%)</div>${renderGroup(medium, '#f59e0b', '🟡', 'Practice more')}</div>` : ''}
+    ${strong.length ? `<div><div style="font-size:12px;font-weight:700;color:#10b981;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">✅ Strong Areas (≥ 75%)</div>${renderGroup(strong, '#10b981', '🟢', 'Keep it up')}</div>` : ''}
+  `;
+}
+
+// ─── Time-per-Question Analysis ───────────────────────────────
+function renderTimePerQuestionAnalysis(attempts) {
+  const container = document.getElementById('time-analysis-content');
+  if (!container) return;
+
+  const withTime = attempts.filter(a => a.time_taken_secs && a.total_questions);
+  if (!withTime.length) {
+    container.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:12px 0;">No timing data available yet.</div>`;
+    return;
+  }
+
+  const rows = withTime.map(a => {
+    const secPerQ = +(a.time_taken_secs / a.total_questions).toFixed(1);
+    const ideal = (currentTest?.duration_minutes || 60) * 60 / (a.total_questions || 50);
+    const status = secPerQ < 20 ? 'rushed' : secPerQ > 120 ? 'slow' : 'good';
+    return { name: a.test_series?.name || '—', secPerQ, pct: +a.percentage, status, date: a.submitted_at };
+  }).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+
+  const maxSec = Math.max(...rows.map(r => r.secPerQ));
+  const avgSec = +(rows.reduce((s, r) => s + r.secPerQ, 0) / rows.length).toFixed(1);
+
+  const colorMap = { rushed: '#ef4444', good: '#10b981', slow: '#f59e0b' };
+  const labelMap = { rushed: '⚡ Too fast', good: '✅ Ideal pace', slow: '🐢 Too slow' };
+
+  container.innerHTML = `
+    <div style="display:flex;gap:24px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="background:rgba(59,130,246,.1);border:1px solid rgba(59,130,246,.2);border-radius:10px;padding:10px 16px;">
+        <div style="font-size:20px;font-weight:800;color:#3b82f6;">${avgSec}s</div>
+        <div style="font-size:11px;color:var(--muted);">Avg per question</div>
+      </div>
+      <div style="background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.2);border-radius:10px;padding:10px 16px;">
+        <div style="font-size:20px;font-weight:800;color:#10b981;">20–90s</div>
+        <div style="font-size:11px;color:var(--muted);">Ideal range</div>
+      </div>
+    </div>
+    ${rows.map(r => `
+    <div class="time-row">
+      <div style="width:120px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.name}">${r.name}</div>
+      <div class="time-bar-wrap">
+        <div class="time-bar-fill" style="width:${Math.min(100, r.secPerQ / maxSec * 100)}%;background:${colorMap[r.status]};"></div>
+      </div>
+      <div style="width:40px;font-size:12px;font-weight:700;color:${colorMap[r.status]};text-align:right;">${r.secPerQ}s</div>
+      <div style="width:100px;font-size:11px;color:${colorMap[r.status]};">${labelMap[r.status]}</div>
+      <div style="width:40px;font-size:12px;color:var(--muted);">${r.pct}%</div>
+    </div>`).join('')}
+    <div style="font-size:11px;color:var(--muted);margin-top:8px;">⚡ &lt;20s per Q = likely guessing · 🐢 &gt;90s per Q = too slow · ✅ 20–90s = ideal</div>
+  `;
+}
+
+// ─── Series vs. Your Average Comparison Chart ─────────────────
+function renderComparisonChart(attempts) {
+  const container = document.getElementById('comparison-chart-content');
+  if (!container) return;
+
+  const seriesMap = {};
+  attempts.forEach(a => {
+    const key = a.test_series?.name || 'Unknown';
+    if (!seriesMap[key]) seriesMap[key] = [];
+    seriesMap[key].push(+a.percentage);
+  });
+
+  const labels   = Object.keys(seriesMap);
+  if (labels.length < 2) {
+    container.innerHTML = `<div style="color:var(--muted);font-size:13px;padding:12px 0;">Take tests in 2+ series to see comparison.</div>`;
+    return;
+  }
+
+  const avgs     = labels.map(k => +(seriesMap[k].reduce((s, v) => s + v, 0) / seriesMap[k].length).toFixed(1));
+  const overall  = +(avgs.reduce((s, v) => s + v, 0) / avgs.length).toFixed(1);
+  const maxVal   = Math.max(...avgs, 100);
+
+  container.innerHTML = `
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Your overall average: <strong style="color:var(--text);">${overall}%</strong> &nbsp;·&nbsp; Dashed line = pass threshold (60%)</div>
+    ${labels.map((label, i) => {
+      const avg   = avgs[i];
+      const diff  = +(avg - overall).toFixed(1);
+      const color = avg >= 75 ? '#10b981' : avg >= 60 ? '#3b82f6' : '#ef4444';
+      return `
+      <div class="compare-row">
+        <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${label}">${label}</div>
+        <div style="position:relative;height:24px;background:var(--surface2);border-radius:4px;overflow:hidden;">
+          <div style="position:absolute;left:${60/maxVal*100}%;width:1px;height:100%;background:rgba(16,185,129,.5);"></div>
+          <div style="position:absolute;left:${overall/maxVal*100}%;width:1px;height:100%;background:rgba(59,130,246,.5);border-left:2px dashed rgba(59,130,246,.5);"></div>
+          <div class="compare-bar" style="width:${avg/maxVal*100}%;background:${color};opacity:.8;"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:4px;">
+          <span style="font-size:13px;font-weight:700;color:${color};">${avg}%</span>
+          ${diff !== 0 ? `<span style="font-size:10px;color:${diff > 0 ? '#10b981' : '#ef4444'};">(${diff > 0 ? '+' : ''}${diff})</span>` : ''}
+        </div>
+      </div>`;
+    }).join('')}
+    <div style="display:flex;gap:16px;margin-top:12px;font-size:11px;color:var(--muted);">
+      <span>🟦 Your overall avg (${overall}%)</span>
+      <span>🟩 Pass line (60%)</span>
+    </div>
+  `;
 }

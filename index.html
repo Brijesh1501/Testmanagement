@@ -87,6 +87,12 @@
 
 <!-- ════════════ APP ════════════ -->
 <div id="app-container" style="display:none;">
+  <!-- Mobile menu button -->
+  <button id="mobile-menu-btn" onclick="toggleMobileSidebar()" aria-label="Toggle menu">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <!-- Sidebar overlay for mobile -->
+  <div id="sidebar-overlay" onclick="closeMobileSidebar()"></div>
   <div id="sidebar">
     <div style="padding:20px;border-bottom:1px solid var(--border);">
       <div class="flex items-center gap-3">
@@ -109,6 +115,7 @@
         <a class="nav-item" id="nav-admin-users"     onclick="navigateTo('admin-users')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>Manage Users</a>
         <a class="nav-item" id="nav-admin-series"    onclick="navigateTo('admin-series')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>Test Series</a>
         <a class="nav-item" id="nav-admin-questions" onclick="navigateTo('admin-questions')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3M12 17h.01"/></svg>Question Bank</a>
+        <a class="nav-item" id="nav-admin-analytics" onclick="navigateTo('admin-analytics')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21H3M21 21V3M9 21V9M15 21V5M3 21V13"/></svg>Admin Analytics</a>
       </div>
     </nav>
     <div style="padding:16px;border-top:1px solid var(--border);">
@@ -200,6 +207,21 @@
             <div style="font-size:11px;color:var(--muted);margin-top:8px;">Requires tests from 2+ different subjects/categories</div>
           </div>
         </div>
+        <!-- Weak Topic Detector -->
+        <div class="chart-box" style="margin-bottom:24px;">
+          <div class="chart-title">🎯 Weak Topic Detector</div>
+          <div id="weak-topic-content" style="color:var(--muted);font-size:13px;">Analysing your performance patterns…</div>
+        </div>
+        <!-- Time-per-Question Analysis -->
+        <div class="chart-box" style="margin-bottom:24px;">
+          <div class="chart-title">⏱ Time-per-Question Analysis</div>
+          <div id="time-analysis-content" style="color:var(--muted);font-size:13px;">Calculating time data…</div>
+        </div>
+        <!-- Comparison Chart -->
+        <div class="chart-box" style="margin-bottom:24px;">
+          <div class="chart-title">📊 Series vs. Your Average Comparison</div>
+          <div id="comparison-chart-content"></div>
+        </div>
       </div>
     </div>
 
@@ -271,13 +293,56 @@
           <button onclick="openAddQuestionModal()" class="btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>Add Question</button>
         </div>
       </div>
-      <div class="glass p-4" style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;">
+      <div class="glass p-4" style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
         <select id="q-filter-series" class="input-field" style="max-width:240px;" onchange="loadAdminQuestions()"><option value="">All Series</option></select>
         <input type="text" class="input-field" placeholder="Search questions…" oninput="filterQuestions(this.value)">
+        <button onclick="runDuplicateDetection()" class="btn-warning" style="white-space:nowrap;flex-shrink:0;">🔍 Find Duplicates</button>
       </div>
+      <div id="duplicate-report" style="display:none;margin-bottom:16px;"></div>
       <div class="glass overflow-hidden">
         <table class="data-table"><thead><tr><th>#</th><th>Question</th><th>Option A</th><th>Ans</th><th>Series</th><th>Actions</th></tr></thead>
         <tbody id="questions-body"></tbody></table>
+      </div>
+    </div>
+
+    <!-- ADMIN ANALYTICS -->
+    <div id="page-admin-analytics" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
+        <div><h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">Admin Analytics</h1><p style="color:var(--muted);font-size:14px;">Platform-wide performance intelligence</p></div>
+        <button onclick="loadAdminAnalytics()" class="btn-secondary" style="font-size:13px;padding:10px 18px;">↻ Refresh</button>
+      </div>
+      <div id="admin-analytics-loading" style="text-align:center;padding:60px;color:var(--muted);">
+        <div style="font-size:32px;margin-bottom:12px;">📊</div><p>Loading analytics…</p>
+      </div>
+      <div id="admin-analytics-content" style="display:none;">
+        <div id="admin-analytics-summary" class="grid grid-cols-2 md:grid-cols-4 gap-4" style="margin-bottom:28px;"></div>
+        <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;">
+          <button class="admin-tab-btn active" id="atab-overview"   onclick="switchAdminTab('overview')">📊 Overview</button>
+          <button class="admin-tab-btn"        id="atab-comparison" onclick="switchAdminTab('comparison')">⚖️ Series Comparison</button>
+          <button class="admin-tab-btn"        id="atab-users-perf" onclick="switchAdminTab('users-perf')">👥 User Performance</button>
+          <button class="admin-tab-btn"        id="atab-activity"   onclick="switchAdminTab('activity')">🔥 Activity</button>
+        </div>
+        <div id="admin-tab-overview">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="margin-bottom:24px;">
+            <div class="chart-box"><div class="chart-title">📈 Daily Attempts (Last 30 days)</div><div style="height:220px;"><canvas id="chart-admin-daily"></canvas></div></div>
+            <div class="chart-box"><div class="chart-title">🎯 Pass Rate by Series</div><div style="height:220px;"><canvas id="chart-admin-passrate"></canvas></div></div>
+          </div>
+          <div class="chart-box"><div class="chart-title">📊 Score Distribution Histogram</div><div style="height:200px;"><canvas id="chart-admin-distribution"></canvas></div></div>
+        </div>
+        <div id="admin-tab-comparison" style="display:none;">
+          <div class="chart-box" style="margin-bottom:24px;"><div class="chart-title">⚖️ Series Head-to-Head Comparison</div><div id="admin-comparison-chart"></div></div>
+          <div class="chart-box"><div class="chart-title">🏆 Series Leaderboard</div><div id="admin-series-leaderboard"></div></div>
+        </div>
+        <div id="admin-tab-users-perf" style="display:none;">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="chart-box"><div class="chart-title">🏅 Top Students</div><div id="admin-top-students"></div></div>
+            <div class="chart-box"><div class="chart-title">🆘 Needs Support</div><div id="admin-struggling-students"></div></div>
+          </div>
+        </div>
+        <div id="admin-tab-activity" style="display:none;">
+          <div class="chart-box" style="margin-bottom:24px;"><div class="chart-title">🔥 Platform Activity Heatmap (Last 12 Weeks)</div><div id="admin-activity-heatmap"></div></div>
+          <div class="chart-box"><div class="chart-title">📅 Peak Usage Hours</div><div style="height:200px;"><canvas id="chart-admin-hours"></canvas></div></div>
+        </div>
       </div>
     </div>
   </div>

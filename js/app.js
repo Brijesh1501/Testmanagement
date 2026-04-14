@@ -17,13 +17,31 @@ function renderSidebar() {
   document.getElementById('user-avatar').textContent       = name[0].toUpperCase();
 }
 
+// ─── Mobile sidebar ───────────────────────────────────────────
+function toggleMobileSidebar() {
+  const sidebar  = document.getElementById('sidebar');
+  const overlay  = document.getElementById('sidebar-overlay');
+  const isOpen   = sidebar.classList.contains('open');
+  if (isOpen) { closeMobileSidebar(); } else {
+    sidebar.classList.add('open');
+    overlay.classList.add('open');
+  }
+}
+function closeMobileSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebar-overlay').classList.remove('open');
+}
+
 function navigateTo(page) {
-  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail'];
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
     showToast('Access denied — admin only.', 'error');
     navigateTo('dashboard');
     return;
   }
+
+  // Close mobile sidebar on navigation
+  closeMobileSidebar();
 
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -34,7 +52,7 @@ function navigateTo(page) {
   if (navEl)   navEl.classList.add('active');
 
   // Destroy charts when leaving analytics page
-  if (page !== 'analytics') destroyAllCharts();
+  if (page !== 'analytics' && page !== 'admin-analytics') destroyAllCharts();
 
   const loaders = {
     'dashboard':         loadDashboard,
@@ -46,6 +64,7 @@ function navigateTo(page) {
     'admin-users':       loadAdminUsers,
     'admin-series':      loadAdminSeries,
     'admin-questions':   loadAdminQuestions,
+    'admin-analytics':   loadAdminAnalytics,
   };
   if (loaders[page]) loaders[page]();
 }

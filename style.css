@@ -373,3 +373,135 @@ canvas       { display: block; }
   100% { box-shadow: 0 0 0 0 rgba(245,158,11,0) }
 }
 #clear-btn:not([style*="opacity: 0"]):hover { animation: clearPulse 0.5s ease; }
+
+/* ── Mobile sidebar overlay ──────────────────────────────── */
+#sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.6);
+  backdrop-filter: blur(2px);
+  z-index: 99;
+}
+#mobile-menu-btn {
+  display: none;
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  z-index: 101;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text);
+}
+@media (max-width: 900px) {
+  #mobile-menu-btn { display: flex; }
+  #sidebar {
+    transform: translateX(-100%);
+    transition: transform .25s cubic-bezier(.4,0,.2,1);
+    z-index: 100;
+  }
+  #sidebar.open { transform: translateX(0); }
+  #sidebar-overlay.open { display: block; }
+  #main-content { margin-left: 0; padding: 16px; padding-top: 64px; }
+}
+
+/* ── Duplicate badge ─────────────────────────────────────── */
+.dup-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(245,158,11,.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245,158,11,.3);
+  cursor: pointer;
+}
+
+/* ── Weak topic card ─────────────────────────────────────── */
+.weak-topic-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+  margin-top: 6px;
+}
+.weak-topic-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width .8s ease;
+}
+
+/* ── Time analysis ───────────────────────────────────────── */
+.time-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(30,45,69,.5);
+  font-size: 13px;
+}
+.time-bar-wrap {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.time-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* ── Admin analytics tabs ────────────────────────────────── */
+.admin-tab-btn {
+  padding: 8px 18px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  font-family: 'Sora', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+}
+.admin-tab-btn.active {
+  background: rgba(59,130,246,.15);
+  border-color: rgba(59,130,246,.4);
+  color: var(--accent);
+}
+
+/* ── Comparison chart ────────────────────────────────────── */
+.compare-row {
+  display: grid;
+  grid-template-columns: 140px 1fr 50px;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+.compare-bar {
+  height: 20px;
+  border-radius: 4px;
+  transition: width .6s ease;
+  position: relative;
+}
+
+/* ── Pulse dot ───────────────────────────────────────────── */
+@keyframes pulse-dot {
+  0%,100% { opacity:1; transform:scale(1); }
+  50%     { opacity:.5; transform:scale(1.4); }
+}
+.pulse-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  animation: pulse-dot 2s infinite;
+}
