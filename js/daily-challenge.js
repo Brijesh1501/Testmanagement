@@ -490,77 +490,76 @@ async function generateDailyChallenge(e) {
   </div>`;
   genBtn.disabled = true;
 
-  const prompt = `You are a professional MCQ question generator for competitive exams (like NORCET, AIIMS, NCLEX nursing exams).
+  // Helper: call Groq for a single batch of N questions
+  async function fetchQuestionBatch(batchCount, batchNum, totalBatches) {
+    const prompt = `You are a professional MCQ question generator for NORCET, AIIMS, and NCLEX nursing exams.
 
-Generate exactly ${count} MCQ questions based on these topics: ${topics.join(', ')}.
-Difficulty level: ${difficulty} (easy = foundational, medium = application, hard = clinical reasoning).
+Generate exactly ${batchCount} MCQ questions on these topics: ${topics.join(', ')}.
+Difficulty: ${difficulty} (easy=foundational, medium=application, hard=clinical reasoning).
 
-STRICT JSON FORMAT — respond with ONLY valid JSON, no markdown, no extra text:
-{
-  "questions": [
-    {
-      "question_text": "Question here?",
-      "option_a": "Option A text",
-      "option_b": "Option B text",
-      "option_c": "Option C text",
-      "option_d": "Option D text",
-      "correct_answer": "A",
-      "explanation": "Brief explanation of why this is correct",
-      "topic": "specific topic from the list"
-    }
-  ]
-}
+Respond with ONLY valid JSON — no markdown, no extra text, no truncation:
+{"questions":[{"question_text":"...","option_a":"...","option_b":"...","option_c":"...","option_d":"...","correct_answer":"A","explanation":"1-2 sentence explanation.","topic":"topic name"}]}
 
 Rules:
-- Each question must have exactly 4 options (A, B, C, D)
+- Exactly 4 options per question (A/B/C/D)
 - correct_answer must be exactly "A", "B", "C", or "D"
-- Explanations should be 1-2 sentences
-- Questions should be clinically accurate and exam-relevant
-- Vary question types: recall, application, analysis
-- Generate exactly ${count} questions`;
-
-  try {
-    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#f59e0b;"></div><span>Groq AI is generating ${count} questions on: ${topics.join(', ')}…</span></div>`;
+- Keep explanations SHORT (1 sentence max) to avoid truncation
+- Clinically accurate, exam-relevant
+- Generate exactly ${batchCount} questions, no more, no less`;
 
     const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${grokKey}`,
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${grokKey}` },
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages: [
-          { role: 'system', content: 'You are an expert MCQ generator. Respond only with valid JSON.' },
-          { role: 'user',   content: prompt }
+          { role: 'system', content: 'You are an expert MCQ generator. Output ONLY valid compact JSON. Never truncate.' },
+          { role: 'user', content: prompt }
         ],
         temperature: 0.7,
-        max_tokens: 3000,
+        max_tokens: 4000,
       }),
     });
-
     if (!res.ok) {
       const errText = await res.text();
       throw new Error(`Groq API error ${res.status}: ${errText}`);
     }
-
-    const data    = await res.json();
+    const data = await res.json();
     const rawText = data.choices?.[0]?.message?.content || '';
-
-    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>Parsing ${count} questions…</span></div>`;
-
-    // Parse JSON — strip markdown fences if present
     const cleaned = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     let parsed;
     try { parsed = JSON.parse(cleaned); }
     catch (pe) {
-      // Try to extract JSON object from response
       const match = cleaned.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('Could not parse JSON from Groq response');
-      parsed = JSON.parse(match[0]);
+      if (!match) throw new Error(`Batch ${batchNum}: Could not parse JSON from Groq. Response may be truncated. Try fewer questions.`);
+      try { parsed = JSON.parse(match[0]); }
+      catch (pe2) { throw new Error(`Batch ${batchNum}: Malformed JSON from Groq. Try reducing question count.`); }
+    }
+    return parsed.questions || parsed;
+  }
+
+  try {
+    // Split into batches of 10 max to avoid token truncation
+    const BATCH_SIZE = 10;
+    const batches = [];
+    let remaining = count;
+    while (remaining > 0) {
+      batches.push(Math.min(remaining, BATCH_SIZE));
+      remaining -= BATCH_SIZE;
     }
 
-    const questions = parsed.questions || parsed;
+    const allQuestions = [];
+    for (let i = 0; i < batches.length; i++) {
+      statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#f59e0b;"></div><span>Groq AI generating batch ${i+1}/${batches.length} (${batches[i]} questions)…</span></div>`;
+      const batchQs = await fetchQuestionBatch(batches[i], i+1, batches.length);
+      allQuestions.push(...batchQs);
+      // Small delay between batches to respect rate limits
+      if (i < batches.length - 1) await new Promise(r => setTimeout(r, 800));
+    }
+
+    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>Validating ${allQuestions.length} questions…</span></div>`;
+
+    const questions = allQuestions;
     if (!Array.isArray(questions) || !questions.length) throw new Error('No questions in response');
 
     // Validate
@@ -731,32 +730,40 @@ ALTER TABLE daily_challenge_questions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_challenge_attempts   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_challenge_answers    ENABLE ROW LEVEL SECURITY;
 
--- Policies
+-- Policies (DROP IF EXISTS first to allow re-running safely)
+DROP POLICY IF EXISTS "Anyone can read active challenges" ON daily_challenges;
 CREATE POLICY "Anyone can read active challenges"
   ON daily_challenges FOR SELECT USING (is_active = true);
 
+DROP POLICY IF EXISTS "Admins manage challenges" ON daily_challenges;
 CREATE POLICY "Admins manage challenges"
   ON daily_challenges FOR ALL
   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
+DROP POLICY IF EXISTS "Anyone can read challenge questions" ON daily_challenge_questions;
 CREATE POLICY "Anyone can read challenge questions"
   ON daily_challenge_questions FOR SELECT USING (true);
 
+DROP POLICY IF EXISTS "Admins manage questions" ON daily_challenge_questions;
 CREATE POLICY "Admins manage questions"
   ON daily_challenge_questions FOR ALL
   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
+DROP POLICY IF EXISTS "Users see own attempts" ON daily_challenge_attempts;
 CREATE POLICY "Users see own attempts"
   ON daily_challenge_attempts FOR SELECT USING (user_id = auth.uid());
 
+DROP POLICY IF EXISTS "Users insert own attempts" ON daily_challenge_attempts;
 CREATE POLICY "Users insert own attempts"
   ON daily_challenge_attempts FOR INSERT WITH CHECK (user_id = auth.uid());
 
+DROP POLICY IF EXISTS "Users see own answers" ON daily_challenge_answers;
 CREATE POLICY "Users see own answers"
   ON daily_challenge_answers FOR SELECT USING (
     EXISTS (SELECT 1 FROM daily_challenge_attempts WHERE id = attempt_id AND user_id = auth.uid())
   );
 
+DROP POLICY IF EXISTS "Users insert own answers" ON daily_challenge_answers;
 CREATE POLICY "Users insert own answers"
   ON daily_challenge_answers FOR INSERT WITH CHECK (
     EXISTS (SELECT 1 FROM daily_challenge_attempts WHERE id = attempt_id AND user_id = auth.uid())
