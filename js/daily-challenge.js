@@ -1,5 +1,5 @@
 // ============================================================
-// daily-challenge.js — Daily Challenge: admin generates via Grok AI,
+// daily-challenge.js — Daily Challenge: admin generates via Groq AI,
 //                      students answer on dashboard, results saved to DB
 // ============================================================
 
@@ -81,7 +81,7 @@ function renderDailyChallengeStart(container, challenge, questions) {
       </div>
     </div>
     <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#fbbf24;line-height:1.6;">
-      💡 <strong>AI-Generated</strong> — These questions were crafted by Grok AI based on today's topics. Complete the challenge to earn your streak!
+      💡 <strong>AI-Generated</strong> — These questions were crafted by Groq AI based on today's topics. Complete the challenge to earn your streak!
     </div>
     <button onclick="startDailyChallenge()" class="btn-primary" style="width:100%;justify-content:center;background:linear-gradient(135deg,#f59e0b,#ef4444);">
       🚀 Start Today's Challenge
@@ -472,11 +472,11 @@ async function generateDailyChallenge(e) {
   const count      = parseInt(document.getElementById('dc-gen-count').value) || 20;
   const timeLim    = parseInt(document.getElementById('dc-gen-time').value) || 15;
   const difficulty = document.getElementById('dc-gen-difficulty').value;
-  const grokKey    = document.getElementById('dc-grok-key').value.trim();
+  const grokKey    = document.getElementById('dc-groq-key').value.trim();
   const editId     = document.getElementById('dc-generate-modal').dataset.editId || '';
 
   if (!topicsRaw) { showToast('Please enter at least one topic.', 'error'); return; }
-  if (!grokKey)   { showToast('Please enter your Grok API key.', 'error'); return; }
+  if (!grokKey)   { showToast('Please enter your Groq API key.', 'error'); return; }
 
   const topics = topicsRaw.split(',').map(t => t.trim()).filter(Boolean);
 
@@ -486,7 +486,7 @@ async function generateDailyChallenge(e) {
   statusEl.style.display = '';
   statusEl.innerHTML = `<div class="dc-gen-status-row">
     <div class="pulse-dot" style="background:#3b82f6;"></div>
-    <span>Connecting to Grok AI…</span>
+    <span>Connecting to Groq AI…</span>
   </div>`;
   genBtn.disabled = true;
 
@@ -520,16 +520,16 @@ Rules:
 - Generate exactly ${count} questions`;
 
   try {
-    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#f59e0b;"></div><span>Grok AI is generating ${count} questions on: ${topics.join(', ')}…</span></div>`;
+    statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#f59e0b;"></div><span>Groq AI is generating ${count} questions on: ${topics.join(', ')}…</span></div>`;
 
-    const res = await fetch('https://api.x.ai/v1/chat/completions', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${grokKey}`,
       },
       body: JSON.stringify({
-        model: 'grok-3-mini',
+        model: 'llama-3.3-70b-versatile',
         messages: [
           { role: 'system', content: 'You are an expert MCQ generator. Respond only with valid JSON.' },
           { role: 'user',   content: prompt }
@@ -541,7 +541,7 @@ Rules:
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`Grok API error ${res.status}: ${errText}`);
+      throw new Error(`Groq API error ${res.status}: ${errText}`);
     }
 
     const data    = await res.json();
@@ -556,7 +556,7 @@ Rules:
     catch (pe) {
       // Try to extract JSON object from response
       const match = cleaned.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('Could not parse JSON from Grok response');
+      if (!match) throw new Error('Could not parse JSON from Groq response');
       parsed = JSON.parse(match[0]);
     }
 
