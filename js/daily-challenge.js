@@ -258,6 +258,16 @@ function updateDCTimerDisplay() {
   el.style.color = s <= 60 ? '#ef4444' : s <= 300 ? '#f59e0b' : 'var(--text)';
 }
 
+// ─── TIMEOUT HELPER ──────────────────────────────────────────
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timed out: ${label}`)), ms)
+    ),
+  ]);
+}
+
 // ─── SUBMIT ──────────────────────────────────────────────────
 function confirmDCSubmit() {
   const answered   = dcState.answers.filter(a => a !== null).length;
