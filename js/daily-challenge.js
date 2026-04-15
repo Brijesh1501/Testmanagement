@@ -790,7 +790,6 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
         title, topics, challenge_date: date, question_count: questions.length,
         time_limit_minutes: timeLim, difficulty,
         is_active: isScheduled ? false : true,
-        scheduled_for: isScheduled ? date : null,
         created_by: currentUser?.id,
       }),
       15000, 'inserting daily_challenges'
@@ -865,7 +864,6 @@ CREATE TABLE IF NOT EXISTS daily_challenges (
   time_limit_minutes int NOT NULL DEFAULT 15,
   difficulty        text NOT NULL DEFAULT 'medium',
   is_active         boolean NOT NULL DEFAULT true,
-  scheduled_for     date,
   created_by        uuid REFERENCES auth.users(id),
   created_at        timestamptz DEFAULT now()
 );
