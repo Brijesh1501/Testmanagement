@@ -275,7 +275,6 @@ function confirmDCSubmit() {
 async function submitDailyChallenge(timeUp = false) {
   if (dcState.submitted) return;
   clearInterval(dcState.timerHandle);
-  dcState.submitted = true;
 
   const { questions, answers, startTime, challenge } = dcState;
   let correct = 0;
@@ -284,37 +283,65 @@ async function submitDailyChallenge(timeUp = false) {
   const timeTaken  = Math.floor((Date.now() - startTime) / 1000);
   const pct        = +(correct / questions.length * 100).toFixed(2);
 
-  // Save attempt
-  const { data: attempt, error } = await sb
-    .from('daily_challenge_attempts')
-    .insert({
-      challenge_id:    challenge.id,
-      user_id:         currentUser.id,
-      score:           correct,
-      total_questions: questions.length,
-      percentage:      pct,
-      time_taken_secs: timeTaken,
-    })
-    .select()
-    .single();
+  // Disable submit button and show saving state
+  const submitBtn = document.getElementById('dc-submit-btn');
+  const bottomSubmit = document.getElementById('dc-sidebar-submit-btn');
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Saving…'; }
+  if (bottomSubmit) { bottomSubmit.disabled = true; bottomSubmit.textContent = 'Saving…'; }
 
-  if (error) { showToast('Error saving result: ' + error.message, 'error'); return; }
+  try {
+    // Save attempt
+    const { data: attempt, error } = await withTimeout(
+      sb.from('daily_challenge_attempts')
+        .insert({
+          challenge_id:    challenge.id,
+          user_id:         currentUser.id,
+          score:           correct,
+          total_questions: questions.length,
+          percentage:      pct,
+          time_taken_secs: timeTaken,
+        })
+        .select()
+        .single(),
+      10000, 'saving attempt'
+    );
 
-  // Save per-question answers
-  await sb.from('daily_challenge_answers').insert(
-    questions.map((q, i) => ({
-      attempt_id:      attempt.id,
-      question_id:     q.id,
-      user_answer:     answers[i] || null,
-      correct_answer:  q.correct_answer,
-      is_correct:      answers[i] === q.correct_answer,
-    }))
-  );
+    if (error) throw new Error('Could not save attempt: ' + error.message + ' — check RLS on daily_challenge_attempts (INSERT policy needs user_id = auth.uid())');
 
-  // Close challenge modal, show result modal
-  document.getElementById('dc-modal').style.display = 'none';
-  showDCResultModal(attempt, questions, answers);
-  loadDailyChallengeWidget();
+    // Save per-question answers (non-blocking — don't let this prevent showing results)
+    try {
+      const { error: ansErr } = await withTimeout(
+        sb.from('daily_challenge_answers').insert(
+          questions.map((q, i) => ({
+            attempt_id:      attempt.id,
+            question_id:     q.id,
+            user_answer:     answers[i] || null,
+            correct_answer:  q.correct_answer,
+            is_correct:      answers[i] === q.correct_answer,
+          }))
+        ),
+        10000, 'saving answers'
+      );
+      if (ansErr) console.warn('Answers save warning:', ansErr.message);
+    } catch (ansEx) {
+      console.warn('Answers save failed (non-fatal):', ansEx.message);
+    }
+
+    // Mark submitted only on success
+    dcState.submitted = true;
+
+    // Close challenge modal, show result modal
+    document.getElementById('dc-modal').style.display = 'none';
+    showDCResultModal(attempt, questions, answers);
+    loadDailyChallengeWidget();
+
+  } catch (err) {
+    // Re-enable buttons so user can retry
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Submit'; }
+    if (bottomSubmit) { bottomSubmit.disabled = false; bottomSubmit.textContent = 'Submit ✓'; }
+    showToast('❌ ' + err.message, 'error');
+    console.error('submitDailyChallenge error:', err);
+  }
 }
 
 function showDCResultModal(attempt, questions, answers) {
