@@ -290,8 +290,8 @@ async function submitDailyChallenge(timeUp = false) {
   if (bottomSubmit) { bottomSubmit.disabled = true; bottomSubmit.textContent = 'Saving…'; }
 
   try {
-    // Save attempt
-    const { data: attempt, error } = await withTimeout(
+    // INSERT the attempt (no .select() here — avoids 406 when SELECT RLS differs from INSERT RLS)
+    const { error: insertErr } = await withTimeout(
       sb.from('daily_challenge_attempts')
         .insert({
           challenge_id:    challenge.id,
@@ -300,13 +300,23 @@ async function submitDailyChallenge(timeUp = false) {
           total_questions: questions.length,
           percentage:      pct,
           time_taken_secs: timeTaken,
-        })
-        .select()
-        .single(),
+        }),
       10000, 'saving attempt'
     );
+    if (insertErr) throw new Error('Could not save attempt: ' + insertErr.message);
 
-    if (error) throw new Error('Could not save attempt: ' + error.message + ' — check RLS on daily_challenge_attempts (INSERT policy needs user_id = auth.uid())');
+    // Fetch back the attempt we just inserted so we have its ID
+    const { data: attempt, error: fetchErr } = await withTimeout(
+      sb.from('daily_challenge_attempts')
+        .select()
+        .eq('challenge_id', challenge.id)
+        .eq('user_id', currentUser.id)
+        .order('submitted_at', { ascending: false })
+        .limit(1)
+        .single(),
+      10000, 'fetching attempt'
+    );
+    if (fetchErr) throw new Error('Attempt saved but could not fetch it back: ' + fetchErr.message);
 
     // Save per-question answers (non-blocking — don't let this prevent showing results)
     try {
@@ -820,12 +830,21 @@ CREATE POLICY "Admins delete questions"
 -- daily_challenge_attempts
 DROP POLICY IF EXISTS "Users see own attempts"    ON daily_challenge_attempts;
 DROP POLICY IF EXISTS "Users insert own attempts" ON daily_challenge_attempts;
+DROP POLICY IF EXISTS "Admins see all attempts"   ON daily_challenge_attempts;
 
 CREATE POLICY "Users see own attempts"
   ON daily_challenge_attempts FOR SELECT USING (user_id = auth.uid());
 
 CREATE POLICY "Users insert own attempts"
   ON daily_challenge_attempts FOR INSERT WITH CHECK (user_id = auth.uid());
+
+-- Admins can see all attempts (for analytics)
+CREATE POLICY "Admins see all attempts"
+  ON daily_challenge_attempts FOR SELECT
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+-- daily_challenge_answers
+DROP POLICY IF EXISTS "Admins see all answers" ON daily_challenge_answers;
 
 -- daily_challenge_answers
 DROP POLICY IF EXISTS "Users see own answers"    ON daily_challenge_answers;
