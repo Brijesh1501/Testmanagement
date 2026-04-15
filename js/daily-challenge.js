@@ -449,24 +449,26 @@ async function loadAdminDailyChallenge() {
   document.getElementById('admin-dc-loading').style.display = '';
   document.getElementById('admin-dc-content').style.display = 'none';
 
-  // Load all challenges ordered by date desc
+  // Load all challenges ordered by date desc (includes future scheduled ones)
   const { data: challenges } = await sb
     .from('daily_challenges')
     .select('*')
     .order('challenge_date', { ascending: false })
-    .limit(30);
+    .limit(60);
 
   document.getElementById('admin-dc-loading').style.display = 'none';
   document.getElementById('admin-dc-content').style.display = '';
 
-  const today = todayKey();
+  const today          = todayKey();
   const todayChallenge = (challenges || []).find(c => c.challenge_date === today);
+  const upcoming = (challenges || []).filter(c => c.challenge_date > today).sort((a,b) => a.challenge_date.localeCompare(b.challenge_date));
 
   // Today status banner
   const statusBanner = document.getElementById('admin-dc-status');
+  let bannerHtml = '';
   if (todayChallenge) {
-    statusBanner.innerHTML = `
-      <div style="background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:16px;margin-bottom:24px;">
+    bannerHtml += `
+      <div style="background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:16px;margin-bottom:16px;">
         <div style="width:40px;height:40px;border-radius:50%;background:rgba(16,185,129,.2);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">✅</div>
         <div style="flex:1;">
           <div style="font-size:14px;font-weight:700;color:#10b981;">Today's challenge is live!</div>
@@ -476,12 +478,32 @@ async function loadAdminDailyChallenge() {
         <button onclick="deleteDailyChallenge('${todayChallenge.id}')" class="btn-danger" style="font-size:12px;padding:8px 14px;">Delete</button>
       </div>`;
   } else {
-    statusBanner.innerHTML = `
-      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:16px;margin-bottom:24px;">
+    bannerHtml += `
+      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:12px;padding:16px 20px;display:flex;align-items:center;gap:16px;margin-bottom:16px;">
         <div style="width:40px;height:40px;border-radius:50%;background:rgba(245,158,11,.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">⚠️</div>
         <div style="flex:1;font-size:14px;font-weight:600;color:#fbbf24;">No challenge set for today. Generate one below!</div>
       </div>`;
   }
+
+  if (upcoming.length) {
+    bannerHtml += `
+      <div style="background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.2);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+        <div style="font-size:12px;font-weight:700;color:#60a5fa;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;">📅 Upcoming Scheduled (${upcoming.length})</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${upcoming.map(c => `
+            <div style="display:flex;align-items:center;gap:12px;padding:8px 10px;background:var(--surface2);border-radius:8px;">
+              <div style="font-size:12px;font-weight:700;color:#60a5fa;min-width:80px;">${c.challenge_date}</div>
+              <div style="flex:1;font-size:13px;font-weight:600;">${c.title}</div>
+              <div style="font-size:11px;color:var(--muted);">${c.question_count}Q · ${(c.topics||[]).slice(0,2).join(', ')}</div>
+              <span class="badge ${c.is_active ? 'badge-green' : ''}" style="${!c.is_active ? 'background:rgba(245,158,11,.12);color:#fbbf24;border:1px solid rgba(245,158,11,.3);' : ''}">${c.is_active ? 'Active' : '📅 Scheduled'}</span>
+              <button onclick="openDCEditModal('${c.id}')" class="btn-success" style="font-size:11px;padding:5px 10px;">Edit</button>
+              ${!c.is_active ? `<button onclick="activateDailyChallenge('${c.id}')" class="btn-primary" style="font-size:11px;padding:5px 10px;">Activate Now</button>` : ''}
+              <button onclick="deleteDailyChallenge('${c.id}')" class="btn-danger" style="font-size:11px;padding:5px 10px;">✕</button>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }
+  statusBanner.innerHTML = bannerHtml;
 
   // Past challenges table
   const pastEl = document.getElementById('admin-dc-past');
@@ -489,21 +511,30 @@ async function loadAdminDailyChallenge() {
     <table class="data-table">
       <thead><tr><th>Date</th><th>Title</th><th>Topics</th><th>Questions</th><th>Attempts</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody>
-        ${(challenges || []).map(c => `
+        ${(challenges || []).map(c => {
+          const isToday    = c.challenge_date === today;
+          const isFuture   = c.challenge_date > today;
+          const statusBadge = c.is_active
+            ? (isToday ? `<span class="badge badge-green">Live Today</span>` : isFuture ? `<span class="badge" style="background:rgba(59,130,246,.15);color:#60a5fa;border:1px solid rgba(59,130,246,.3);">Active</span>` : `<span class="badge badge-green">Active</span>`)
+            : (isFuture ? `<span class="badge" style="background:rgba(245,158,11,.12);color:#fbbf24;border:1px solid rgba(245,158,11,.3);">📅 Scheduled</span>` : `<span class="badge badge-red">Inactive</span>`);
+          return `
         <tr>
-          <td class="mono" style="font-size:12px;">${c.challenge_date}</td>
+          <td class="mono" style="font-size:12px;">${c.challenge_date}${isFuture ? ' <span style="font-size:10px;color:#f59e0b;">future</span>' : ''}</td>
           <td style="font-size:13px;font-weight:600;">${c.title || '—'}</td>
           <td style="font-size:12px;color:var(--muted);">${(c.topics||[]).slice(0,3).join(', ')}${(c.topics||[]).length > 3 ? '…' : ''}</td>
           <td style="font-size:13px;">${c.question_count || 20}</td>
           <td><span id="dc-att-${c.id}" style="font-size:13px;color:var(--muted);">—</span></td>
-          <td><span class="badge ${c.is_active ? 'badge-green' : 'badge-red'}">${c.is_active ? 'Active' : 'Inactive'}</span></td>
+          <td>${statusBadge}</td>
           <td>
-            <div style="display:flex;gap:6px;">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
               <button onclick="openDCEditModal('${c.id}')" class="btn-success" style="font-size:11px;padding:6px 10px;">Edit</button>
+              ${!c.is_active
+                ? `<button onclick="activateDailyChallenge('${c.id}')" class="btn-primary" style="font-size:11px;padding:6px 10px;">Activate</button>`
+                : `<button onclick="deactivateDailyChallenge('${c.id}')" class="btn-secondary" style="font-size:11px;padding:6px 10px;">Deactivate</button>`}
               <button onclick="deleteDailyChallenge('${c.id}')" class="btn-danger" style="font-size:11px;padding:6px 10px;">Delete</button>
             </div>
           </td>
-        </tr>`).join('')}
+        </tr>`;}).join('')}
       </tbody>
     </table>` : `<div style="text-align:center;padding:40px;color:var(--muted);">No challenges yet. Create your first one!</div>`;
 
@@ -524,6 +555,8 @@ function openDCGenerateModal() {
   document.getElementById('dc-gen-time').value     = '15';
   document.getElementById('dc-gen-difficulty').value = 'medium';
   document.getElementById('dc-gen-status').style.display = 'none';
+  delete document.getElementById('dc-generate-modal').dataset.editId;
+  updateDCScheduleHint();
   document.getElementById('dc-generate-modal').style.display = 'flex';
 }
 
@@ -538,10 +571,50 @@ async function openDCEditModal(challengeId) {
   document.getElementById('dc-gen-difficulty').value = c.difficulty || 'medium';
   document.getElementById('dc-gen-status').style.display = 'none';
   document.getElementById('dc-generate-modal').dataset.editId = challengeId;
+  updateDCScheduleHint();
   document.getElementById('dc-generate-modal').style.display = 'flex';
 }
 
-// ─── ADMIN: GENERATE VIA GROK AI ─────────────────────────────
+// ─── SCHEDULE HINT (shown next to date picker) ───────────────
+function updateDCScheduleHint() {
+  const hintEl = document.getElementById('dc-schedule-hint');
+  const infoBox = document.getElementById('dc-scheduling-info');
+  const date  = document.getElementById('dc-gen-date')?.value;
+  const today = todayKey();
+  if (!date) {
+    if (hintEl) hintEl.textContent = '';
+    if (infoBox) infoBox.style.display = 'none';
+    return;
+  }
+  const isFuture = date > today;
+  const isToday  = date === today;
+
+  if (hintEl) {
+    if (isToday) {
+      hintEl.innerHTML = `<span style="color:#10b981;">✅ Goes live today</span>`;
+    } else if (isFuture) {
+      hintEl.innerHTML = `<span style="color:#f59e0b;">📅 Scheduling for future date — saved as inactive</span>`;
+    } else {
+      hintEl.innerHTML = `<span style="color:#60a5fa;">📋 Backdated — will be saved as active</span>`;
+    }
+  }
+  if (infoBox) infoBox.style.display = isFuture ? '' : 'none';
+}
+
+// ─── ACTIVATE SCHEDULED CHALLENGE ────────────────────────────
+async function activateDailyChallenge(id) {
+  const { error } = await sb.from('daily_challenges').update({ is_active: true }).eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  showToast('Challenge activated!', 'success');
+  loadAdminDailyChallenge();
+}
+
+async function deactivateDailyChallenge(id) {
+  const { error } = await sb.from('daily_challenges').update({ is_active: false }).eq('id', id);
+  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  showToast('Challenge deactivated.', 'info');
+  loadAdminDailyChallenge();
+}
 async function generateDailyChallenge(e) {
   e.preventDefault();
 
@@ -553,6 +626,8 @@ async function generateDailyChallenge(e) {
   const difficulty = document.getElementById('dc-gen-difficulty').value;
   const grokKey    = document.getElementById('dc-groq-key').value.trim();
   const editId     = document.getElementById('dc-generate-modal').dataset.editId || '';
+  const today      = todayKey();
+  const isScheduled = date > today; // future date = scheduled (inactive until that day)
 
   if (!topicsRaw) { showToast('Please enter at least one topic.', 'error'); return; }
   if (!grokKey)   { showToast('Please enter your Groq API key.', 'error'); return; }
@@ -655,10 +730,13 @@ Rules:
     const updateStatus = (msg) => {
       statusEl.innerHTML = `<div class="dc-gen-status-row"><div class="pulse-dot" style="background:#10b981;"></div><span>${msg}</span></div>`;
     };
-    await saveDailyChallenge({ title, topics, date, count: valid.length, timeLim, difficulty, questions: valid, editId, onProgress: updateStatus });
+    await saveDailyChallenge({ title, topics, date, count: valid.length, timeLim, difficulty, questions: valid, editId, isScheduled, onProgress: updateStatus });
 
-    statusEl.innerHTML = `<div class="dc-gen-status-row" style="color:#10b981;"><span>✅ ${valid.length} questions saved! Challenge is live for ${date}.</span></div>`;
-    showToast(`Daily challenge created with ${valid.length} AI questions!`, 'success');
+    const liveMsg = isScheduled
+      ? `📅 Scheduled! ${valid.length} questions ready for ${date}.`
+      : `🎉 ${valid.length} questions saved! Challenge is live for ${date}.`;
+    statusEl.innerHTML = `<div class="dc-gen-status-row" style="color:#10b981;"><span>✅ ${liveMsg}</span></div>`;
+    showToast(isScheduled ? `Challenge scheduled for ${date}!` : `Daily challenge created with ${valid.length} AI questions!`, 'success');
 
     setTimeout(() => {
       closeModal('dc-generate-modal');
@@ -682,7 +760,7 @@ function withTimeout(promise, ms, label) {
   return Promise.race([promise, timeout]);
 }
 
-async function saveDailyChallenge({ title, topics, date, count, timeLim, difficulty, questions, editId, onProgress = () => {} }) {
+async function saveDailyChallenge({ title, topics, date, count, timeLim, difficulty, questions, editId, isScheduled = false, onProgress = () => {} }) {
   let challengeId = editId;
 
   if (editId) {
@@ -690,7 +768,8 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
     const { error } = await withTimeout(
       sb.from('daily_challenges').update({
         title, topics, challenge_date: date, question_count: questions.length,
-        time_limit_minutes: timeLim, difficulty, is_active: true,
+        time_limit_minutes: timeLim, difficulty,
+        is_active: isScheduled ? false : true,
       }).eq('id', editId),
       10000, 'updating daily_challenges'
     );
@@ -701,17 +780,35 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
       10000, 'deleting old questions'
     );
   } else {
-    // Insert new
-    const { data, error } = await withTimeout(
+    // Insert new — do NOT chain .select().single() here.
+    // Supabase executes a SELECT after INSERT to return the row, and when the
+    // admin's SELECT policy uses USING (rather than WITH CHECK) it can fire
+    // *before* the row is committed, causing a timeout / RLS block.
+    // Instead we insert, then do a separate SELECT to retrieve the new id.
+    const { error: insertErr } = await withTimeout(
       sb.from('daily_challenges').insert({
         title, topics, challenge_date: date, question_count: questions.length,
-        time_limit_minutes: timeLim, difficulty, is_active: true,
+        time_limit_minutes: timeLim, difficulty,
+        is_active: isScheduled ? false : true,
+        scheduled_for: isScheduled ? date : null,
         created_by: currentUser?.id,
-      }).select().single(),
-      10000, 'inserting daily_challenges'
+      }),
+      15000, 'inserting daily_challenges'
     );
-    if (error) throw new Error('DB insert failed: ' + error.message + '. Check Supabase RLS policies — admin needs INSERT on daily_challenges.');
-    challengeId = data.id;
+    if (insertErr) throw new Error('DB insert failed: ' + insertErr.message + '. Check Supabase RLS — admin needs INSERT on daily_challenges. Try the SQL fix below.');
+
+    // Now fetch back the row we just inserted to get its id
+    const { data: newRow, error: fetchErr } = await withTimeout(
+      sb.from('daily_challenges')
+        .select('id')
+        .eq('challenge_date', date)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single(),
+      10000, 'fetching new challenge id'
+    );
+    if (fetchErr || !newRow) throw new Error('Challenge inserted but could not retrieve its id: ' + (fetchErr?.message || 'no row'));
+    challengeId = newRow.id;
   }
 
   // Insert questions in batches of 10 to avoid payload limits
@@ -764,6 +861,7 @@ CREATE TABLE IF NOT EXISTS daily_challenges (
   time_limit_minutes int NOT NULL DEFAULT 15,
   difficulty        text NOT NULL DEFAULT 'medium',
   is_active         boolean NOT NULL DEFAULT true,
+  scheduled_for     date,
   created_by        uuid REFERENCES auth.users(id),
   created_at        timestamptz DEFAULT now()
 );
