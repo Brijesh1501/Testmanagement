@@ -755,7 +755,7 @@ Rules:
 // Wraps a promise with a timeout so Supabase hangs don't freeze the UI forever
 function withTimeout(promise, ms, label) {
   const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s: ${label}. Check Supabase RLS policies — the admin user may not have INSERT permission on daily_challenges.`)), ms)
+    setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s: ${label}. Check Supabase RLS — run the schema SQL to add the "Admins read all challenges" policy, then retry.`)), ms)
   );
   return Promise.race([promise, timeout]);
 }
@@ -797,17 +797,21 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
     );
     if (insertErr) throw new Error('DB insert failed: ' + insertErr.message + '. Check Supabase RLS — admin needs INSERT on daily_challenges. Try the SQL fix below.');
 
-    // Now fetch back the row we just inserted to get its id
+    // Now fetch back the row we just inserted to get its id.
+    // We filter by both challenge_date AND created_by (the current admin's uid)
+    // so this SELECT works even when is_active = false (scheduled challenges),
+    // where the "Students read active challenges" RLS policy won't match.
     const { data: newRow, error: fetchErr } = await withTimeout(
       sb.from('daily_challenges')
         .select('id')
         .eq('challenge_date', date)
+        .eq('created_by', currentUser.id)
         .order('created_at', { ascending: false })
         .limit(1)
         .single(),
       10000, 'fetching new challenge id'
     );
-    if (fetchErr || !newRow) throw new Error('Challenge inserted but could not retrieve its id: ' + (fetchErr?.message || 'no row'));
+    if (fetchErr || !newRow) throw new Error('Challenge inserted but could not retrieve its id: ' + (fetchErr?.message || 'no row') + '. Make sure the "Admins read all challenges" RLS policy is applied (see schema SQL).');
     challengeId = newRow.id;
   }
 
@@ -917,14 +921,26 @@ ALTER TABLE daily_challenge_answers    ENABLE ROW LEVEL SECURITY;
 
 -- daily_challenges
 DROP POLICY IF EXISTS "Anyone can read active challenges"  ON daily_challenges;
+DROP POLICY IF EXISTS "Students read active challenges"    ON daily_challenges;
 DROP POLICY IF EXISTS "Admins manage challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins select challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Admins read all challenges"         ON daily_challenges;
 DROP POLICY IF EXISTS "Admins insert challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins update challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins delete challenges"           ON daily_challenges;
 
-CREATE POLICY "Anyone can read active challenges"
-  ON daily_challenges FOR SELECT USING (is_active = true);
+-- Students: only see active (live) challenges
+CREATE POLICY "Students read active challenges"
+  ON daily_challenges FOR SELECT
+  USING (
+    is_active = true
+    AND NOT EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
+  );
+
+-- Admins: see ALL challenges including inactive/scheduled ones
+CREATE POLICY "Admins read all challenges"
+  ON daily_challenges FOR SELECT
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
 -- Split ALL into explicit INSERT/UPDATE/DELETE so WITH CHECK works on INSERT
 CREATE POLICY "Admins insert challenges"
