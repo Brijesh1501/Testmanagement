@@ -105,6 +105,11 @@ function showAdminLogin() {
 // ─── Close modals on backdrop click ──────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.modal-overlay').forEach(el => {
-    el.addEventListener('click', e => { if (e.target === el) el.style.display = 'none'; });
+    el.addEventListener('click', e => {
+      // Never close dc-modal via backdrop click — it interferes with the
+      // inline confirm banner and submitDailyChallenge async flow.
+      if (el._dcProtected) return;
+      if (e.target === el) el.style.display = 'none';
+    });
   });
 });

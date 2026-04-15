@@ -161,6 +161,11 @@ function startDailyChallenge() {
   const questions = window._dcQuestions;
   if (!challenge || !questions) return;
 
+  // Prevent the global modal-overlay backdrop-click handler (ui.js) from
+  // closing dc-modal while a challenge is in progress.
+  const dcModal = document.getElementById('dc-modal');
+  if (dcModal) dcModal._dcProtected = true;
+
   dcState = {
     challenge,
     questions,
@@ -270,16 +275,41 @@ function withTimeout(promise, ms, label) {
 
 // ─── SUBMIT ──────────────────────────────────────────────────
 function confirmDCSubmit() {
+  if (dcState.submitted) return;
   const answered   = dcState.answers.filter(a => a !== null).length;
   const unanswered = dcState.questions.length - answered;
-  showConfirm(
-    'Submit Challenge',
-    unanswered > 0
-      ? `You have ${unanswered} unanswered question${unanswered > 1 ? 's' : ''}. Submit anyway?`
-      : 'All questions answered. Ready to submit?',
-    () => submitDailyChallenge(false),
-    '⚡'
-  );
+
+  // Use an inline banner instead of the shared confirm-modal.
+  // The shared modal-overlay click handler (ui.js) closes dc-modal on backdrop
+  // clicks, which races with submitDailyChallenge and causes the "stuck" bug.
+  const existing = document.getElementById('dc-inline-confirm');
+  if (existing) { existing.remove(); return; }
+
+  const msg = unanswered > 0
+    ? `⚠️ ${unanswered} question${unanswered > 1 ? 's' : ''} unanswered. Submit anyway?`
+    : '✅ All questions answered. Submit?';
+
+  const banner = document.createElement('div');
+  banner.id = 'dc-inline-confirm';
+  banner.style.cssText = [
+    'position:fixed', 'bottom:24px', 'left:50%', 'transform:translateX(-50%)',
+    'background:var(--surface)', 'border:1px solid var(--border)', 'border-radius:14px',
+    'padding:16px 20px', 'display:flex', 'align-items:center', 'gap:14px',
+    'box-shadow:0 8px 32px rgba(0,0,0,.4)', 'z-index:10000',
+    'font-size:14px', 'font-family:Sora,sans-serif', 'max-width:92vw'
+  ].join(';');
+  banner.innerHTML = `
+    <span style="flex:1;line-height:1.5;">${msg}</span>
+    <button id="dc-confirm-cancel-btn" style="padding:8px 16px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);cursor:pointer;font-size:13px;font-family:Sora,sans-serif;white-space:nowrap;">Cancel</button>
+    <button id="dc-confirm-ok-btn" style="padding:8px 16px;border-radius:8px;border:none;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;cursor:pointer;font-size:13px;font-weight:700;font-family:Sora,sans-serif;white-space:nowrap;">Submit ✓</button>
+  `;
+  document.body.appendChild(banner);
+
+  document.getElementById('dc-confirm-cancel-btn').onclick = () => banner.remove();
+  document.getElementById('dc-confirm-ok-btn').onclick = () => {
+    banner.remove();
+    submitDailyChallenge(false);
+  };
 }
 
 async function submitDailyChallenge(timeUp = false) {
@@ -351,7 +381,9 @@ async function submitDailyChallenge(timeUp = false) {
     dcState.submitted = true;
 
     // Close challenge modal, show result modal
-    document.getElementById('dc-modal').style.display = 'none';
+    const dcModalEl = document.getElementById('dc-modal');
+    if (dcModalEl) dcModalEl._dcProtected = false;
+    dcModalEl.style.display = 'none';
     showDCResultModal(attempt, questions, answers);
     loadDailyChallengeWidget();
 
