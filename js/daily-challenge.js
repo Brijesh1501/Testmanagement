@@ -730,44 +730,96 @@ ALTER TABLE daily_challenge_questions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_challenge_attempts   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE daily_challenge_answers    ENABLE ROW LEVEL SECURITY;
 
--- Policies (DROP IF EXISTS first to allow re-running safely)
-DROP POLICY IF EXISTS "Anyone can read active challenges" ON daily_challenges;
+-- ============================================================
+-- RLS POLICIES  (safe to re-run — drops first)
+-- ============================================================
+
+-- Helper: is the current user an admin?
+-- (checks your profiles table where role = 'admin')
+-- ============================================================
+
+-- daily_challenges
+DROP POLICY IF EXISTS "Anyone can read active challenges"  ON daily_challenges;
+DROP POLICY IF EXISTS "Admins manage challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Admins select challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Admins insert challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Admins update challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Admins delete challenges"           ON daily_challenges;
+
 CREATE POLICY "Anyone can read active challenges"
   ON daily_challenges FOR SELECT USING (is_active = true);
 
-DROP POLICY IF EXISTS "Admins manage challenges" ON daily_challenges;
-CREATE POLICY "Admins manage challenges"
-  ON daily_challenges FOR ALL
+-- Split ALL into explicit INSERT/UPDATE/DELETE so WITH CHECK works on INSERT
+CREATE POLICY "Admins insert challenges"
+  ON daily_challenges FOR INSERT
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE POLICY "Admins update challenges"
+  ON daily_challenges FOR UPDATE
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE POLICY "Admins delete challenges"
+  ON daily_challenges FOR DELETE
   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
+CREATE POLICY "Admins select challenges"
+  ON daily_challenges FOR SELECT
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+-- daily_challenge_questions
 DROP POLICY IF EXISTS "Anyone can read challenge questions" ON daily_challenge_questions;
+DROP POLICY IF EXISTS "Admins manage questions"             ON daily_challenge_questions;
+DROP POLICY IF EXISTS "Admins insert questions"             ON daily_challenge_questions;
+DROP POLICY IF EXISTS "Admins update questions"             ON daily_challenge_questions;
+DROP POLICY IF EXISTS "Admins delete questions"             ON daily_challenge_questions;
+
 CREATE POLICY "Anyone can read challenge questions"
   ON daily_challenge_questions FOR SELECT USING (true);
 
-DROP POLICY IF EXISTS "Admins manage questions" ON daily_challenge_questions;
-CREATE POLICY "Admins manage questions"
-  ON daily_challenge_questions FOR ALL
+CREATE POLICY "Admins insert questions"
+  ON daily_challenge_questions FOR INSERT
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE POLICY "Admins update questions"
+  ON daily_challenge_questions FOR UPDATE
+  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'))
+  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+
+CREATE POLICY "Admins delete questions"
+  ON daily_challenge_questions FOR DELETE
   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
-DROP POLICY IF EXISTS "Users see own attempts" ON daily_challenge_attempts;
+-- daily_challenge_attempts
+DROP POLICY IF EXISTS "Users see own attempts"    ON daily_challenge_attempts;
+DROP POLICY IF EXISTS "Users insert own attempts" ON daily_challenge_attempts;
+
 CREATE POLICY "Users see own attempts"
   ON daily_challenge_attempts FOR SELECT USING (user_id = auth.uid());
 
-DROP POLICY IF EXISTS "Users insert own attempts" ON daily_challenge_attempts;
 CREATE POLICY "Users insert own attempts"
   ON daily_challenge_attempts FOR INSERT WITH CHECK (user_id = auth.uid());
 
-DROP POLICY IF EXISTS "Users see own answers" ON daily_challenge_answers;
+-- daily_challenge_answers
+DROP POLICY IF EXISTS "Users see own answers"    ON daily_challenge_answers;
+DROP POLICY IF EXISTS "Users insert own answers" ON daily_challenge_answers;
+
 CREATE POLICY "Users see own answers"
   ON daily_challenge_answers FOR SELECT USING (
     EXISTS (SELECT 1 FROM daily_challenge_attempts WHERE id = attempt_id AND user_id = auth.uid())
   );
 
-DROP POLICY IF EXISTS "Users insert own answers" ON daily_challenge_answers;
 CREATE POLICY "Users insert own answers"
   ON daily_challenge_answers FOR INSERT WITH CHECK (
     EXISTS (SELECT 1 FROM daily_challenge_attempts WHERE id = attempt_id AND user_id = auth.uid())
-  );`;
+  );
+
+-- ============================================================
+-- VERIFY your admin user has role = 'admin' in profiles:
+-- SELECT id, email, role FROM profiles WHERE role = 'admin';
+-- If empty, run:
+-- UPDATE profiles SET role = 'admin' WHERE email = 'your@email.com';
+-- ============================================================`;
 
   const blob = new Blob([sql], { type: 'text/plain' });
   const url  = URL.createObjectURL(blob);
