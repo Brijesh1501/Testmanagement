@@ -463,6 +463,20 @@ async function loadAdminDailyChallenge() {
   const todayChallenge = (challenges || []).find(c => c.challenge_date === today);
   const upcoming = (challenges || []).filter(c => c.challenge_date > today).sort((a,b) => a.challenge_date.localeCompare(b.challenge_date));
 
+  // Analytics shortcut button
+  {
+    const content = document.getElementById('admin-dc-content');
+    if (content && !document.getElementById('admin-dc-analytics-btn')) {
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:14px;';
+      btnRow.innerHTML = `<button id="admin-dc-analytics-btn" onclick="loadAdminDCAnalytics()"
+        style="padding:9px 16px;border-radius:10px;border:none;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:7px;">
+        📈 View Analytics
+      </button>`;
+      content.insertBefore(btnRow, content.firstChild);
+    }
+  }
+
   // Today status banner
   const statusBanner = document.getElementById('admin-dc-status');
   let bannerHtml = '';
@@ -527,6 +541,7 @@ async function loadAdminDailyChallenge() {
           <td>${statusBadge}</td>
           <td>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button onclick="openDCQuestionsModal('${c.id}')" class="btn-primary" style="font-size:11px;padding:6px 10px;">📋 Questions</button>
               <button onclick="openDCEditModal('${c.id}')" class="btn-success" style="font-size:11px;padding:6px 10px;">Edit</button>
               ${!c.is_active
                 ? `<button onclick="activateDailyChallenge('${c.id}')" class="btn-primary" style="font-size:11px;padding:6px 10px;">Activate</button>`
@@ -1029,4 +1044,474 @@ CREATE POLICY "Users insert own answers"
   a.click();
   URL.revokeObjectURL(url);
   showToast('SQL schema downloaded!', 'success');
+}
+
+// ============================================================
+// ─── FEATURE 1: ADMIN — DAILY CHALLENGE ANALYTICS ────────────
+// ============================================================
+
+async function loadAdminDCAnalytics() {
+  const modal = document.getElementById('dc-analytics-modal');
+  if (!modal) { buildDCAnalyticsModal(); }
+  document.getElementById('dc-analytics-modal').style.display = 'flex';
+  document.getElementById('dc-analytics-body').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:center;padding:60px;color:var(--muted);">
+      <div style="text-align:center;">
+        <div style="font-size:32px;margin-bottom:12px;">⏳</div>
+        <div style="font-size:14px;">Loading analytics…</div>
+      </div>
+    </div>`;
+
+  // Fetch last 30 challenges with attempt counts and avg scores
+  const { data: challenges } = await sb
+    .from('daily_challenges')
+    .select('*')
+    .order('challenge_date', { ascending: false })
+    .limit(30);
+
+  if (!challenges || !challenges.length) {
+    document.getElementById('dc-analytics-body').innerHTML =
+      `<div style="text-align:center;padding:60px;color:var(--muted);">No challenge data yet.</div>`;
+    return;
+  }
+
+  // Fetch all attempts for these challenges
+  const challengeIds = challenges.map(c => c.id);
+  const { data: allAttempts } = await sb
+    .from('daily_challenge_attempts')
+    .select('challenge_id, user_id, score, total_questions, percentage, submitted_at')
+    .in('challenge_id', challengeIds);
+
+  // Fetch total student count
+  const { count: totalStudents } = await sb
+    .from('profiles')
+    .select('*', { count: 'exact', head: true })
+    .eq('role', 'student');
+
+  // Build per-challenge stats
+  const attMap = {};
+  (allAttempts || []).forEach(a => {
+    if (!attMap[a.challenge_id]) attMap[a.challenge_id] = [];
+    attMap[a.challenge_id].push(a);
+  });
+
+  const statsRows = challenges.map(c => {
+    const atts       = attMap[c.id] || [];
+    const count      = atts.length;
+    const avgPct     = count ? +(atts.reduce((s, a) => s + +a.percentage, 0) / count).toFixed(1) : 0;
+    const passCount  = atts.filter(a => +a.percentage >= 70).length;
+    const passRate   = count ? +(passCount / count * 100).toFixed(1) : 0;
+    const partRate   = totalStudents ? +(count / totalStudents * 100).toFixed(1) : 0;
+    return { ...c, attCount: count, avgPct, passRate, partRate };
+  });
+
+  // Topic frequency across all challenges
+  const topicFreq = {};
+  const topicScores = {};
+  challenges.forEach(c => {
+    (c.topics || []).forEach(t => {
+      topicFreq[t] = (topicFreq[t] || 0) + 1;
+    });
+  });
+  (allAttempts || []).forEach(a => {
+    const ch = challenges.find(c => c.id === a.challenge_id);
+    (ch?.topics || []).forEach(t => {
+      if (!topicScores[t]) topicScores[t] = [];
+      topicScores[t].push(+a.percentage);
+    });
+  });
+  const topicAvg = Object.entries(topicScores).map(([t, scores]) => ({
+    topic: t,
+    avg: +(scores.reduce((s, v) => s + v, 0) / scores.length).toFixed(1),
+    count: scores.length,
+  })).sort((a, b) => b.count - a.count).slice(0, 8);
+
+  // Streak leaderboard
+  const { data: streakData } = await sb
+    .from('daily_challenge_attempts')
+    .select('user_id, submitted_at, profiles(full_name)')
+    .order('submitted_at', { ascending: true });
+
+  const leaderboard = buildStreakLeaderboard(streakData || []);
+
+  // Render
+  const recent7 = [...statsRows].reverse().slice(-7);
+  const overallAvg = statsRows.length
+    ? +(statsRows.reduce((s, r) => s + r.avgPct, 0) / statsRows.length).toFixed(1) : 0;
+  const totalAttempts = (allAttempts || []).length;
+  const avgParticipation = statsRows.length
+    ? +(statsRows.reduce((s, r) => s + r.partRate, 0) / statsRows.length).toFixed(1) : 0;
+
+  document.getElementById('dc-analytics-body').innerHTML = `
+    <!-- Summary stats -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px;">
+      ${dcStatMini('Challenges Run', challenges.length, '#3b82f6', '📅')}
+      ${dcStatMini('Total Attempts', totalAttempts, '#10b981', '✍️')}
+      ${dcStatMini('Avg Score', overallAvg + '%', '#f59e0b', '🎯')}
+      ${dcStatMini('Avg Participation', avgParticipation + '%', '#06b6d4', '👥')}
+    </div>
+
+    <!-- Participation & Score trend (mini bar charts using CSS) -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px;">
+      <div class="glass p-4">
+        <div style="font-size:13px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:8px;">
+          📊 Avg Score (Last 7 Challenges)
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:90px;">
+          ${recent7.map(r => {
+            const h = Math.max(4, r.avgPct * 0.85);
+            const col = r.avgPct >= 70 ? '#10b981' : r.avgPct >= 50 ? '#f59e0b' : '#ef4444';
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;">
+              <div style="font-size:10px;color:var(--muted);">${r.avgPct}%</div>
+              <div style="width:100%;border-radius:4px 4px 0 0;background:${col};height:${h}px;"></div>
+              <div style="font-size:9px;color:var(--muted);text-align:center;max-width:40px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${r.challenge_date?.slice(5)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="glass p-4">
+        <div style="font-size:13px;font-weight:700;margin-bottom:14px;">👥 Participation Rate (Last 7)</div>
+        <div style="display:flex;align-items:flex-end;gap:6px;height:90px;">
+          ${recent7.map(r => {
+            const h = Math.max(4, r.partRate * 0.85);
+            return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;">
+              <div style="font-size:10px;color:var(--muted);">${r.partRate}%</div>
+              <div style="width:100%;border-radius:4px 4px 0 0;background:linear-gradient(to top,#3b82f6,#06b6d4);height:${h}px;"></div>
+              <div style="font-size:9px;color:var(--muted);text-align:center;max-width:40px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;">${r.challenge_date?.slice(5)}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Topic performance -->
+    <div class="glass p-4" style="margin-bottom:24px;">
+      <div style="font-size:13px;font-weight:700;margin-bottom:14px;">🏷 Topic Performance</div>
+      ${topicAvg.length ? `
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          ${topicAvg.map(t => `
+            <div style="display:flex;align-items:center;gap:10px;">
+              <div style="min-width:130px;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.topic}</div>
+              <div style="flex:1;background:var(--surface2);border-radius:4px;height:10px;overflow:hidden;">
+                <div style="height:100%;border-radius:4px;background:${t.avg >= 70 ? '#10b981' : t.avg >= 50 ? '#f59e0b' : '#ef4444'};width:${t.avg}%;transition:width .6s;"></div>
+              </div>
+              <div style="font-size:12px;font-weight:700;min-width:45px;text-align:right;">${t.avg}%</div>
+              <div style="font-size:10px;color:var(--muted);min-width:60px;">${t.count} attempts</div>
+            </div>`).join('')}
+        </div>` : `<div style="color:var(--muted);font-size:13px;">No topic data yet.</div>`}
+    </div>
+
+    <!-- Streak Leaderboard -->
+    <div class="glass p-4" style="margin-bottom:24px;">
+      <div style="font-size:13px;font-weight:700;margin-bottom:14px;">🔥 Streak Leaderboard (Top 10)</div>
+      ${leaderboard.length ? `
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${leaderboard.slice(0, 10).map((u, i) => `
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface2);border-radius:8px;">
+              <div style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;background:${i === 0 ? 'rgba(245,158,11,.2)' : i === 1 ? 'rgba(148,163,184,.15)' : i === 2 ? 'rgba(180,83,9,.15)' : 'var(--border)'};color:${i === 0 ? '#f59e0b' : i === 1 ? '#94a3b8' : i === 2 ? '#b45309' : 'var(--muted)'};">${i + 1}</div>
+              <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#3b82f6,#06b6d4);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${(u.name || '?')[0].toUpperCase()}</div>
+              <div style="flex:1;font-size:13px;font-weight:600;">${u.name || 'Unknown'}</div>
+              <div style="font-size:14px;font-weight:800;color:#f59e0b;">${u.streak} 🔥</div>
+              <div style="font-size:11px;color:var(--muted);">${u.total} total</div>
+            </div>`).join('')}
+        </div>` : `<div style="color:var(--muted);font-size:13px;">No streaks yet.</div>`}
+    </div>
+
+    <!-- Per-challenge detailed table -->
+    <div class="glass p-4">
+      <div style="font-size:13px;font-weight:700;margin-bottom:14px;">📋 All Challenges — Detailed Stats</div>
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Date</th><th>Title</th><th>Topics</th><th>Attempts</th>
+              <th>Avg Score</th><th>Pass Rate</th><th>Participation</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${statsRows.map(r => `
+              <tr>
+                <td class="mono" style="font-size:12px;">${r.challenge_date}</td>
+                <td style="font-size:13px;font-weight:600;">${r.title || '—'}</td>
+                <td style="font-size:12px;color:var(--muted);">${(r.topics||[]).slice(0,3).join(', ')}</td>
+                <td style="font-size:13px;">${r.attCount}</td>
+                <td><span style="font-weight:700;color:${r.avgPct >= 70 ? '#10b981' : r.avgPct >= 50 ? '#f59e0b' : '#ef4444'}">${r.avgPct}%</span></td>
+                <td><span style="font-weight:700;color:${r.passRate >= 60 ? '#10b981' : '#f59e0b'}">${r.passRate}%</span></td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <div style="flex:1;background:var(--surface2);border-radius:4px;height:6px;min-width:60px;">
+                      <div style="height:100%;border-radius:4px;background:#3b82f6;width:${Math.min(100, r.partRate)}%;"></div>
+                    </div>
+                    <span style="font-size:12px;font-weight:600;">${r.partRate}%</span>
+                  </div>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function dcStatMini(label, value, color, emoji) {
+  return `<div style="background:var(--surface2);border-radius:12px;padding:14px;border:1px solid var(--border);">
+    <div style="font-size:22px;margin-bottom:4px;">${emoji}</div>
+    <div style="font-size:22px;font-weight:800;color:${color};">${value}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px;">${label}</div>
+  </div>`;
+}
+
+function buildStreakLeaderboard(attempts) {
+  // Group by user
+  const byUser = {};
+  attempts.forEach(a => {
+    const uid  = a.user_id;
+    const name = a.profiles?.full_name || 'Unknown';
+    if (!byUser[uid]) byUser[uid] = { name, dates: new Set(), total: 0 };
+    byUser[uid].dates.add(new Date(a.submitted_at).toLocaleDateString('en-CA'));
+    byUser[uid].total++;
+  });
+
+  // Compute current streak for each user
+  return Object.values(byUser).map(u => {
+    const days = u.dates;
+    let streak = 0;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const d = new Date(today);
+    while (days.has(d.toLocaleDateString('en-CA'))) {
+      streak++;
+      d.setDate(d.getDate() - 1);
+    }
+    return { name: u.name, streak, total: u.total };
+  }).sort((a, b) => b.streak - a.streak || b.total - a.total);
+}
+
+function buildDCAnalyticsModal() {
+  const div = document.createElement('div');
+  div.id = 'dc-analytics-modal';
+  div.className = 'modal-overlay';
+  div.style.cssText = 'display:none;z-index:1200;';
+  div.innerHTML = `
+    <div class="modal-box" style="max-width:900px;width:95%;max-height:90vh;overflow-y:auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;position:sticky;top:0;background:var(--surface);padding-bottom:12px;border-bottom:1px solid var(--border);z-index:1;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:18px;">📈</div>
+          <div>
+            <div style="font-size:16px;font-weight:800;">Daily Challenge Analytics</div>
+            <div style="font-size:12px;color:var(--muted);">Last 30 challenges · All students</div>
+          </div>
+        </div>
+        <button onclick="document.getElementById('dc-analytics-modal').style.display='none'" style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);">✕</button>
+      </div>
+      <div id="dc-analytics-body"></div>
+    </div>`;
+  document.body.appendChild(div);
+  div.addEventListener('click', e => { if (e.target === div) div.style.display = 'none'; });
+}
+
+
+// ============================================================
+// ─── FEATURE 2: ADMIN — VIEW & DOWNLOAD ALL DC QUESTIONS ─────
+// ============================================================
+
+async function openDCQuestionsModal(challengeId) {
+  // Build modal if it doesn't exist yet
+  if (!document.getElementById('dc-questions-modal')) buildDCQuestionsModal();
+
+  const modal = document.getElementById('dc-questions-modal');
+  modal.style.display = 'flex';
+  document.getElementById('dc-questions-body').innerHTML = `
+    <div style="display:flex;justify-content:center;padding:40px;color:var(--muted);">
+      <div style="text-align:center;"><div style="font-size:28px;margin-bottom:10px;">⏳</div><div>Loading questions…</div></div>
+    </div>`;
+  document.getElementById('dc-questions-download-btn').style.display = 'none';
+
+  // Fetch challenge
+  const { data: challenge } = await sb
+    .from('daily_challenges')
+    .select('*')
+    .eq('id', challengeId)
+    .single();
+
+  if (!challenge) {
+    document.getElementById('dc-questions-body').innerHTML =
+      `<div style="color:var(--muted);text-align:center;padding:40px;">Challenge not found.</div>`;
+    return;
+  }
+
+  document.getElementById('dc-questions-modal-title').textContent = challenge.title || 'Daily Challenge';
+  document.getElementById('dc-questions-modal-meta').textContent =
+    `${challenge.challenge_date} · Topics: ${(challenge.topics||[]).join(', ')} · ${challenge.question_count || '?'}Q · ${challenge.difficulty || 'medium'}`;
+
+  // Fetch questions
+  const { data: questions } = await sb
+    .from('daily_challenge_questions')
+    .select('*')
+    .eq('challenge_id', challengeId)
+    .order('order_index');
+
+  if (!questions || !questions.length) {
+    document.getElementById('dc-questions-body').innerHTML =
+      `<div style="color:var(--muted);text-align:center;padding:40px;">No questions found for this challenge.</div>`;
+    return;
+  }
+
+  // Store for PDF download
+  window._dcQuestionsForPdf = { challenge, questions };
+
+  document.getElementById('dc-questions-body').innerHTML = questions.map((q, i) => `
+    <div style="padding:16px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);margin-bottom:12px;">
+      <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:12px;">
+        <div style="min-width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#f59e0b,#ef4444);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:#fff;flex-shrink:0;">Q${i + 1}</div>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:600;line-height:1.6;margin-bottom:4px;">${q.question_text}</div>
+          ${q.topic ? `<span style="font-size:10px;background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.25);border-radius:20px;padding:2px 8px;">${q.topic}</span>` : ''}
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;">
+        ${['A','B','C','D'].map(l => `
+          <div style="padding:8px 12px;border-radius:8px;font-size:13px;
+            background:${l === q.correct_answer ? 'rgba(16,185,129,.12)' : 'rgba(30,45,69,.5)'};
+            border:1px solid ${l === q.correct_answer ? 'rgba(16,185,129,.35)' : 'var(--border)'};
+            color:${l === q.correct_answer ? '#10b981' : 'var(--text)'};
+            position:relative;">
+            ${l === q.correct_answer ? '<span style="position:absolute;top:6px;right:8px;font-size:11px;">✓</span>' : ''}
+            <strong>${l}.</strong> ${q['option_' + l.toLowerCase()]}
+          </div>`).join('')}
+      </div>
+      ${q.explanation ? `
+        <div style="padding:9px 12px;border-radius:8px;background:rgba(59,130,246,.07);border:1px solid rgba(59,130,246,.18);font-size:12px;color:#93c5fd;line-height:1.6;">
+          <strong>💡 Explanation:</strong> ${q.explanation}
+        </div>` : ''}
+    </div>`).join('');
+
+  document.getElementById('dc-questions-download-btn').style.display = '';
+}
+
+function buildDCQuestionsModal() {
+  const div = document.createElement('div');
+  div.id = 'dc-questions-modal';
+  div.className = 'modal-overlay';
+  div.style.cssText = 'display:none;z-index:1200;';
+  div.innerHTML = `
+    <div class="modal-box" style="max-width:800px;width:95%;max-height:90vh;overflow-y:auto;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;position:sticky;top:0;background:var(--surface);padding-bottom:12px;border-bottom:1px solid var(--border);z-index:1;gap:12px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:16px;font-weight:800;margin-bottom:4px;" id="dc-questions-modal-title">Questions</div>
+          <div style="font-size:12px;color:var(--muted);" id="dc-questions-modal-meta"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+          <button id="dc-questions-download-btn" onclick="downloadDCQuestionsPdf()"
+            style="display:none;padding:8px 14px;border-radius:9px;border:none;background:linear-gradient(135deg,#3b82f6,#06b6d4);color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;">
+            ⬇ Download PDF
+          </button>
+          <button onclick="document.getElementById('dc-questions-modal').style.display='none'"
+            style="background:none;border:none;font-size:22px;cursor:pointer;color:var(--muted);">✕</button>
+        </div>
+      </div>
+      <div id="dc-questions-body"></div>
+    </div>`;
+  document.body.appendChild(div);
+  div.addEventListener('click', e => { if (e.target === div) div.style.display = 'none'; });
+}
+
+// ─── PDF GENERATOR (pure JS, no external library needed) ─────
+function downloadDCQuestionsPdf() {
+  const { challenge, questions } = window._dcQuestionsForPdf || {};
+  if (!challenge || !questions) { showToast('No data to export.', 'error'); return; }
+
+  showToast('Generating PDF…', 'info');
+
+  // Build HTML page that will be printed to PDF via a hidden iframe
+  const topicsStr   = (challenge.topics || []).join(', ') || 'General';
+  const dateStr     = challenge.challenge_date || '';
+  const titleStr    = challenge.title || 'Daily Challenge';
+  const diffStr     = (challenge.difficulty || 'medium').charAt(0).toUpperCase() + (challenge.difficulty || 'medium').slice(1);
+
+  const questionsHtml = questions.map((q, i) => {
+    const opts = ['A', 'B', 'C', 'D'].map(l => {
+      const isCorrect = l === q.correct_answer;
+      return `<div class="option ${isCorrect ? 'correct' : ''}">
+        <span class="opt-label">${l}</span>
+        <span>${escHtml(q['option_' + l.toLowerCase()] || '')}</span>
+        ${isCorrect ? '<span class="tick">✓</span>' : ''}
+      </div>`;
+    }).join('');
+
+    return `
+    <div class="question-block">
+      <div class="q-header">
+        <div class="q-num">Q${i + 1}</div>
+        <div class="q-body">
+          <p class="q-text">${escHtml(q.question_text)}</p>
+          ${q.topic ? `<span class="topic-tag">${escHtml(q.topic)}</span>` : ''}
+        </div>
+      </div>
+      <div class="options">${opts}</div>
+      ${q.explanation ? `<div class="explanation"><strong>💡 Explanation:</strong> ${escHtml(q.explanation)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${titleStr} — Questions</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e2d45; background: #fff; padding: 40px 48px; font-size: 13px; }
+  .cover { margin-bottom: 32px; padding-bottom: 20px; border-bottom: 3px solid #3b82f6; }
+  .cover h1 { font-size: 24px; font-weight: 800; color: #1e2d45; margin-bottom: 6px; }
+  .cover .meta { font-size: 12px; color: #64748b; display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; }
+  .cover .meta span { background: #f1f5f9; border-radius: 20px; padding: 3px 10px; }
+  .question-block { margin-bottom: 26px; padding: 16px; border-radius: 10px; border: 1px solid #e2e8f0; page-break-inside: avoid; }
+  .q-header { display: flex; gap: 12px; margin-bottom: 12px; align-items: flex-start; }
+  .q-num { min-width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg,#f59e0b,#ef4444); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; flex-shrink: 0; }
+  .q-body { flex: 1; }
+  .q-text { font-size: 14px; font-weight: 600; line-height: 1.6; margin-bottom: 6px; }
+  .topic-tag { font-size: 10px; background: #eff6ff; color: #3b82f6; border: 1px solid #bfdbfe; border-radius: 20px; padding: 2px 8px; }
+  .options { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+  .option { display: flex; align-items: flex-start; gap: 8px; padding: 7px 10px; border-radius: 7px; border: 1px solid #e2e8f0; font-size: 12px; position: relative; }
+  .option.correct { background: #f0fdf4; border-color: #86efac; color: #166534; font-weight: 600; }
+  .opt-label { font-weight: 800; min-width: 16px; }
+  .tick { position: absolute; right: 8px; top: 6px; font-size: 11px; color: #16a34a; }
+  .explanation { padding: 9px 12px; border-radius: 7px; background: #eff6ff; border: 1px solid #bfdbfe; font-size: 12px; color: #1e40af; line-height: 1.6; }
+  .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+  @media print {
+    body { padding: 24px 32px; }
+    .question-block { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <h1>${titleStr}</h1>
+    <div class="meta">
+      <span>📅 ${dateStr}</span>
+      <span>🏷 ${topicsStr}</span>
+      <span>📝 ${questions.length} Questions</span>
+      <span>⚡ ${diffStr}</span>
+      <span>⏱ ${challenge.time_limit_minutes || 15} min</span>
+    </div>
+  </div>
+  ${questionsHtml}
+  <div class="footer">Generated from OmegaTest · ${new Date().toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })}</div>
+</body>
+</html>`;
+
+  // Open in new tab and trigger print dialog (browser saves as PDF)
+  const win = window.open('', '_blank');
+  if (!win) { showToast('Please allow popups to download the PDF.', 'error'); return; }
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  setTimeout(() => { win.print(); }, 600);
+  showToast('PDF print dialog opened!', 'success');
+}
+
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
