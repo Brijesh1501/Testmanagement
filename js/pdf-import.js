@@ -155,12 +155,157 @@ function cleanLines(text) { return text.split('\n').filter(l => !isJunk(l)).join
 
 function parsePdfText(rawText) {
   const cleaned = cleanLines(rawText);
+  // Format 4: NNL/TAT/AHN style — "Question N: …" with "A:\n<text>" and "Correct Answer: X"
+  const f4 = parseFormatNNL(cleaned);        if (f4.length >= 3) return f4;
+  const f4r = parseFormatNNL(rawText);       if (f4r.length >= 3) return f4r;
   const f1 = parseFormatQuestion(cleaned);   if (f1.length >= 3) return f1;
   const f3 = parseFormatNCLEX(cleaned);      if (f3.length >= 3) return f3;
   const f2 = parseFormatNumbered(cleaned);   if (f2.length >= 3) return f2;
   const fb3 = parseFormatNCLEX(rawText);     if (fb3.length >= 3) return fb3;
   const fb1 = parseFormatQuestion(rawText);  if (fb1.length >= 3) return fb1;
   return [];
+}
+
+// ─── Format 4: NNL / TAT / AHN style ─────────────────────────
+// Layout:
+//   Question N: <question text, may wrap multiple lines>
+//   A:
+//   B:
+//   C:
+//   D:
+//   <option A text>
+//   <option B text>
+//   <option C text>
+//   <option D text>
+//   Correct Answer: X
+//   Rationale / Explanation:
+//   <explanation text, multi-line>
+//
+// The options labels (A:/B:/C:/D:) always appear as standalone lines
+// immediately before the four option texts in order.
+function parseFormatNNL(text) {
+  const qs = [];
+
+  // Split on "Question N:" boundaries (case-insensitive, colon required)
+  const blocks = text.split(/(?=^Question\s+\d+\s*:)/mi);
+
+  for (const block of blocks) {
+    if (!block.trim()) continue;
+
+    const lines = block.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+    if (lines.length < 6) continue;
+
+    // ── 1. Extract question text ──────────────────────────────
+    const firstLine = lines[0].replace(/^Question\s+\d+\s*:\s*/i, '').trim();
+    const qLines = [firstLine];
+
+    let i = 1;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (/^[A-D]\s*:$/.test(l)) break;
+      if (/^Correct\s*Answer\s*:/i.test(l)) break;
+      if (/^Rationale/i.test(l)) break;
+      if (/^[A-D]\s*:\s+\S/.test(l)) break;
+      i++;
+      qLines.push(l);
+    }
+    const qText = qLines.filter(Boolean).join(' ').trim();
+    if (!qText) continue;
+
+    // ── 2. Find the four standalone option labels (A: B: C: D:) ──
+    const labelPositions = {};
+    for (let j = i; j < lines.length; j++) {
+      const m = lines[j].match(/^([A-D])\s*:$/);
+      if (m) labelPositions[m[1]] = j;
+    }
+
+    let opts = { A: '', B: '', C: '', D: '' };
+    let answer = '';
+    let explanation = '';
+
+    if (Object.keys(labelPositions).length === 4) {
+      // Option texts appear after the last label line, in A/B/C/D order
+      const lastLabelIdx = Math.max(...Object.values(labelPositions));
+      const optionValues = [];
+      let j = lastLabelIdx + 1;
+      while (j < lines.length && optionValues.length < 4) {
+        const l = lines[j];
+        if (/^Correct\s*Answer\s*:/i.test(l)) break;
+        if (/^Rationale/i.test(l)) break;
+        if (/^[A-D]\s*:$/.test(l)) { j++; continue; }
+        optionValues.push(l);
+        j++;
+      }
+      ['A','B','C','D'].forEach((lt, idx) => { if (optionValues[idx]) opts[lt] = optionValues[idx].trim(); });
+
+      // Correct Answer
+      for (let k = j; k < lines.length; k++) {
+        const ansM = lines[k].match(/^Correct\s*Answer\s*:\s*([A-D])\b/i);
+        if (ansM) { answer = ansM[1].toUpperCase(); j = k + 1; break; }
+      }
+
+      // Rationale / Explanation
+      let inRationale = false;
+      const rationaleLines = [];
+      for (let k = j; k < lines.length; k++) {
+        const l = lines[k];
+        if (/^Rationale\s*[\/\\]?\s*Explanation\s*:/i.test(l) || /^Rationale\s*:/i.test(l)) {
+          inRationale = true;
+          const rest = l.replace(/^Rationale\s*[\/\\]?\s*Explanation\s*:/i, '')
+                        .replace(/^Rationale\s*:/i, '').trim();
+          if (rest) rationaleLines.push(rest);
+          continue;
+        }
+        if (inRationale) {
+          if (/^Question\s+\d+\s*:/i.test(l)) break;
+          if (/^Page\s+\d+/i.test(l)) continue;
+          rationaleLines.push(l);
+        }
+      }
+      explanation = rationaleLines.join(' ').trim();
+
+    } else {
+      // Fallback: inline "A: <text>" options on same line
+      let j2 = i;
+      let inRationale = false;
+      const rationaleLines = [];
+      while (j2 < lines.length) {
+        const l = lines[j2];
+        const inlineOpt = l.match(/^([A-D])\s*:\s+(.+)/);
+        const ansM      = l.match(/^Correct\s*Answer\s*:\s*([A-D])\b/i);
+        if (/^Rationale\s*[\/\\]?\s*Explanation\s*:/i.test(l) || /^Rationale\s*:/i.test(l)) {
+          inRationale = true;
+          const rest = l.replace(/^Rationale\s*[\/\\]?\s*Explanation\s*:/i, '')
+                        .replace(/^Rationale\s*:/i, '').trim();
+          if (rest) rationaleLines.push(rest);
+        } else if (inRationale) {
+          if (/^Question\s+\d+\s*:/i.test(l)) break;
+          if (/^Page\s+\d+/i.test(l)) { j2++; continue; }
+          rationaleLines.push(l);
+        } else if (ansM) {
+          answer = ansM[1].toUpperCase();
+        } else if (inlineOpt) {
+          const lt = inlineOpt[1].toUpperCase();
+          if (!opts[lt]) opts[lt] = inlineOpt[2].trim();
+        }
+        j2++;
+      }
+      explanation = rationaleLines.join(' ').trim();
+    }
+
+    if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
+      qs.push({
+        question:    qText,
+        option_a:    opts.A,
+        option_b:    opts.B,
+        option_c:    opts.C,
+        option_d:    opts.D,
+        answer,
+        explanation: explanation || '',
+      });
+    }
+  }
+  return qs;
 }
 
 // Format 1: QUESTION N → A. B. C. D. → Answer: X
