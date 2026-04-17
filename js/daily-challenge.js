@@ -268,7 +268,7 @@ function withTimeout(promise, ms, label) {
   return Promise.race([
     promise,
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error(`Timed out: ${label}`)), ms)
+      setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s: ${label}. The DB request never resolved — this usually means an RLS policy is missing or the column doesn't exist in the table.`)), ms)
     ),
   ]);
 }
@@ -752,14 +752,6 @@ Rules:
   }
 }
 
-// Wraps a promise with a timeout so Supabase hangs don't freeze the UI forever
-function withTimeout(promise, ms, label) {
-  const timeout = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(`Timed out after ${ms/1000}s: ${label}. Check Supabase RLS — run the schema SQL to add the "Admins read all challenges" policy, then retry.`)), ms)
-  );
-  return Promise.race([promise, timeout]);
-}
-
 async function saveDailyChallenge({ title, topics, date, count, timeLim, difficulty, questions, editId, isScheduled = false, onProgress = () => {} }) {
   let challengeId = editId;
 
@@ -780,38 +772,27 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
       10000, 'deleting old questions'
     );
   } else {
-    // Insert new — do NOT chain .select().single() here.
-    // Supabase executes a SELECT after INSERT to return the row, and when the
-    // admin's SELECT policy uses USING (rather than WITH CHECK) it can fire
-    // *before* the row is committed, causing a timeout / RLS block.
-    // Instead we insert, then do a separate SELECT to retrieve the new id.
-    const { error: insertErr } = await withTimeout(
-      sb.from('daily_challenges').insert({
-        title, topics, challenge_date: date, question_count: questions.length,
-        time_limit_minutes: timeLim, difficulty,
-        is_active: isScheduled ? false : true,
-        created_by: currentUser?.id,
-      }),
+    // Insert and immediately retrieve the new row id in one round-trip.
+    // Requires: INSERT WITH CHECK policy + SELECT policy for admins on daily_challenges.
+    const { data: insertedRow, error: insertErr } = await withTimeout(
+      sb.from('daily_challenges')
+        .insert({
+          title, topics, challenge_date: date, question_count: questions.length,
+          time_limit_minutes: timeLim, difficulty,
+          is_active: isScheduled ? false : true,
+        })
+        .select('id')
+        .single(),
       15000, 'inserting daily_challenges'
     );
-    if (insertErr) throw new Error('DB insert failed: ' + insertErr.message + '. Check Supabase RLS — admin needs INSERT on daily_challenges. Try the SQL fix below.');
-
-    // Now fetch back the row we just inserted to get its id.
-    // We filter by both challenge_date AND created_by (the current admin's uid)
-    // so this SELECT works even when is_active = false (scheduled challenges),
-    // where the "Students read active challenges" RLS policy won't match.
-    const { data: newRow, error: fetchErr } = await withTimeout(
-      sb.from('daily_challenges')
-        .select('id')
-        .eq('challenge_date', date)
-        .eq('created_by', currentUser.id)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single(),
-      10000, 'fetching new challenge id'
-    );
-    if (fetchErr || !newRow) throw new Error('Challenge inserted but could not retrieve its id: ' + (fetchErr?.message || 'no row') + '. Make sure the "Admins read all challenges" RLS policy is applied (see schema SQL).');
-    challengeId = newRow.id;
+    if (insertErr) {
+      const detail = insertErr.code ? ` [${insertErr.code}]` : '';
+      throw new Error('DB insert failed' + detail + ': ' + insertErr.message +
+        '. Fix: 1) Add "Admins insert challenges" policy WITH CHECK on daily_challenges,' +
+        ' 2) Add "Admins read all challenges" SELECT policy, 3) Check for duplicate challenge_date.');
+    }
+    if (!insertedRow?.id) throw new Error('Insert OK but no id returned — add "Admins read all challenges" SELECT policy.');
+    challengeId = insertedRow.id;
   }
 
   // Insert questions in batches of 10 to avoid payload limits
