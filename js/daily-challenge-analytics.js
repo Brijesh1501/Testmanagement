@@ -39,13 +39,24 @@ async function loadDCAnalytics() {
 // STUDENT DC ANALYTICS
 // ══════════════════════════════════════════════════════════════
 async function loadStudentDCAnalytics(container) {
-  const { data: attempts } = await sb
+  // Fetch attempts WITHOUT a join — students can only read their own attempts,
+  // and the daily_challenges join fails silently for inactive/past challenges
+  // due to RLS. We fetch challenges separately and merge client-side.
+  const { data: rawAttempts, error: attErr } = await sb
     .from('daily_challenge_attempts')
-    .select('*, daily_challenges(title, challenge_date, topics)')
+    .select('id, challenge_id, score, total_questions, percentage, time_taken_secs, submitted_at')
     .eq('user_id', currentUser.id)
     .order('submitted_at', { ascending: true });
 
-  if (!attempts || !attempts.length) {
+  if (attErr) {
+    container.innerHTML = `<div style="color:#f87171;padding:24px;text-align:center;">
+      Error loading attempts: ${attErr.message}</div>`;
+    return;
+  }
+
+  const attempts = rawAttempts || [];
+
+  if (!attempts.length) {
     container.innerHTML = `
       <div style="text-align:center;padding:60px 20px;color:var(--muted);">
         <div style="font-size:48px;margin-bottom:16px;">📊</div>
@@ -54,6 +65,20 @@ async function loadStudentDCAnalytics(container) {
       </div>`;
     return;
   }
+
+  // Fetch challenge metadata separately using the challenge IDs we already have
+  const challengeIds = [...new Set(attempts.map(a => a.challenge_id))];
+  const challengeMap = {};
+  if (challengeIds.length) {
+    // Use admin-style broad select — if RLS blocks inactive ones, we just get fewer titles (graceful)
+    const { data: challenges } = await sb
+      .from('daily_challenges')
+      .select('id, title, challenge_date, topics')
+      .in('id', challengeIds);
+    (challenges || []).forEach(c => { challengeMap[c.id] = c; });
+  }
+  // Attach challenge data to each attempt
+  attempts.forEach(a => { a.daily_challenges = challengeMap[a.challenge_id] || null; });
 
   const total   = attempts.length;
   const avgPct  = +(attempts.reduce((s, a) => s + +a.percentage, 0) / total).toFixed(1);
@@ -241,18 +266,17 @@ async function loadAdminDCAnalytics(container) {
   const uids = [...new Set(attempts.map(a => a.user_id))];
   const profileMap = {};
   if (uids.length) {
+    // profiles table has: id, full_name (no email column)
     const { data: profs } = await sb
       .from('profiles')
-      .select('id, full_name, email')
+      .select('id, full_name')
       .in('id', uids);
     (profs || []).forEach(p => { profileMap[p.id] = p; });
   }
   attempts.forEach(a => {
     const prof = profileMap[a.user_id] || null;
-    if (prof && !prof._displayName) {
-      prof._displayName = prof.full_name || prof.email || ('Student …' + a.user_id.slice(-6));
-    }
-    a._profile = prof || { _displayName: 'Student …' + a.user_id.slice(-6) };
+    const displayName = prof?.full_name || ('Student #' + a.user_id.slice(0, 8));
+    a._profile = { ...(prof || {}), _displayName: displayName };
   });
 
   // 4. Build per-challenge map
@@ -332,7 +356,7 @@ function buildDCLeaderboard(attempts) {
 
   const byStudent = {};
   attempts.forEach(a => {
-    const displayName = a._profile?._displayName || a._profile?.full_name || a._profile?.email || ('Student …' + a.user_id.slice(-6));
+    const displayName = a._profile?._displayName || a._profile?.full_name || ('Student #' + a.user_id.slice(0, 8));
     if (!byStudent[a.user_id]) byStudent[a.user_id] = { name: displayName, scores: [], dates: new Set() };
     byStudent[a.user_id].scores.push(+a.percentage);
     byStudent[a.user_id].dates.add(a.submitted_at?.slice(0,10));
@@ -605,9 +629,12 @@ async function downloadDCPDFSingle(challengeId) {
     const questions = qRes.data   || [];
 
     if (attempts.length) {
-      const { data: profs } = await sb.from('profiles').select('id,full_name,email').in('id', attempts.map(a => a.user_id));
+      const { data: profs } = await sb.from('profiles').select('id,full_name').in('id', attempts.map(a => a.user_id));
       const pm = {}; (profs||[]).forEach(p => pm[p.id] = p);
-      attempts.forEach(a => { a._profile = pm[a.user_id] || null; });
+      attempts.forEach(a => {
+        const prof = pm[a.user_id] || null;
+        a._profile = prof ? { ...prof, _displayName: prof.full_name || ('Student #' + a.user_id.slice(0,8)) } : { _displayName: 'Student #' + a.user_id.slice(0,8) };
+      });
     }
     if (!challenge) throw new Error('Challenge not found');
     const doc = buildDCPDFDoc([{ challenge, questions, attempts }]);
@@ -634,9 +661,12 @@ async function downloadDCPDFAll() {
       ]);
       let attempts = aRes.data || [];
       if (attempts.length) {
-        const { data: profs } = await sb.from('profiles').select('id,full_name,email').in('id', attempts.map(a => a.user_id));
+        const { data: profs } = await sb.from('profiles').select('id,full_name').in('id', attempts.map(a => a.user_id));
         const pm = {}; (profs||[]).forEach(p => pm[p.id] = p);
-        attempts.forEach(a => { a._profile = pm[a.user_id] || null; });
+        attempts.forEach(a => {
+          const prof = pm[a.user_id] || null;
+          a._profile = prof ? { ...prof, _displayName: prof.full_name || ('Student #' + a.user_id.slice(0,8)) } : { _displayName: 'Student #' + a.user_id.slice(0,8) };
+        });
       }
       return { challenge: c, questions: qRes.data || [], attempts };
     }));
@@ -994,7 +1024,7 @@ function buildDCPDFDoc(items) {
 
         const pct    = +att.percentage;
         const pColor = pct>=70 ? C.green : pct>=50 ? C.yellow : C.red;
-        const name   = safe(att._profile?._displayName || att._profile?.full_name || att._profile?.email || ('Student …' + att.user_id.slice(-6)));
+        const name   = safe(att._profile?._displayName || att._profile?.full_name || ('Student #' + att.user_id.slice(0, 8)));
 
         doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...C.bodyText);
         doc.text(doc.splitTextToSize(name, 54)[0], cols[0].x+2, y+5);
