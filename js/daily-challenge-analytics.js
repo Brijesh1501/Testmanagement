@@ -683,25 +683,29 @@ function buildDCPDFDoc(items) {
   const doc   = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
   const PW = 210, PH = 297;
-  const ML = 14, MR = 14, MT = 20, MB = 14;
-  const CW = PW - ML - MR;
+  const ML = 12, MR = 12, MT = 18, MB = 14;
+  const CW = PW - ML - MR;   // 186 mm usable width
 
-  // Light colour palette
+  // ── Colour palette (light background) ──────────────────────
   const C = {
     white:       [255, 255, 255],
-    pageBg:      [250, 251, 253],
+    pageBg:      [248, 250, 252],   // slate-50
     headerBg:    [30,  64,  175],   // blue-800
     headerText:  [255, 255, 255],
     accentBlue:  [37,  99,  235],   // blue-600
     accentLight: [219, 234, 254],   // blue-100
-    green:       [22,  163, 74 ],   // green-600
+    accentStripe:[59,  130, 246],   // blue-500
+    green:       [21,  128, 61 ],   // green-700
     greenLight:  [220, 252, 231],   // green-100
     greenBorder: [134, 239, 172],   // green-300
-    yellow:      [202, 138,  4 ],
-    red:         [220,  38,  38],
+    greenText:   [22,  101, 52 ],   // green-800
+    yellow:      [161, 98,   7 ],   // amber-700
+    red:         [185,  28,  28],   // red-700
     bodyText:    [15,  23,  42 ],   // slate-900
+    subText:     [51,  65,  85 ],   // slate-700
     muted:       [100, 116, 139],   // slate-500
     border:      [203, 213, 225],   // slate-300
+    lightBorder: [226, 232, 240],   // slate-200
     rowEven:     [241, 245, 249],   // slate-100
     optBg:       [248, 250, 252],   // slate-50
     expBg:       [239, 246, 255],   // blue-50
@@ -709,354 +713,444 @@ function buildDCPDFDoc(items) {
     expText:     [29,  78,  216],   // blue-700
     badgeBg:     [237, 233, 254],   // violet-100
     badgeText:   [109, 40,  217],   // violet-700
-    statBg:      [241, 245, 249],
+    statBg:      [241, 245, 249],   // slate-100
+    cardBg:      [255, 255, 255],
   };
 
   let y = MT;
 
-  // strip non-Latin characters so jsPDF doesn't produce garbled output
+  // ── Helpers ─────────────────────────────────────────────────
+
+  // Strip non-Latin chars that jsPDF can't render (emoji, Unicode symbols)
   function safe(str) {
     if (!str) return '';
-    return String(str).replace(/[^\x20-\x7E\xA0-\xFF]/g, '').replace(/\s+/g,' ').trim();
+    return String(str)
+      .replace(/[^\x20-\x7E\xA0-\xFF]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
+
+  // ASCII correct indicator — no Unicode, always renders
+  const CORRECT_LABEL = '[Correct Answer]';
 
   function bgFill() {
     doc.setFillColor(...C.pageBg);
     doc.rect(0, 0, PW, PH, 'F');
   }
 
-  function drawHeader() {
+  function drawPageHeader() {
     doc.setFillColor(...C.headerBg);
-    doc.rect(0, 0, PW, 10, 'F');
-    doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.headerText);
-    doc.text('OmegaTest  |  Daily Challenge Report', ML, 6.5);
-    doc.text('Generated: ' + new Date().toLocaleString('en-IN'), PW - MR, 6.5, { align: 'right' });
+    doc.rect(0, 0, PW, 9, 'F');
+    doc.setFontSize(6.5); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.headerText);
+    doc.text('OmegaTest  |  Daily Challenge Report', ML, 5.8);
+    doc.text('Generated: ' + new Date().toLocaleString('en-IN'), PW - MR, 5.8, { align: 'right' });
   }
 
   function newPage() {
     doc.addPage();
     bgFill();
     y = MT;
-    drawHeader();
+    drawPageHeader();
   }
 
-  function checkPage(need = 10) {
-    if (y + need > PH - MB - 8) newPage();
-  }
-
-  function hline(color = C.border, lw = 0.25) {
-    doc.setDrawColor(...color); doc.setLineWidth(lw);
-    doc.line(ML, y, PW - MR, y);
-    y += 3;
+  function checkPage(need) {
+    if (y + need > PH - MB - 9) newPage();
   }
 
   function sectionBand(text) {
-    checkPage(12);
+    checkPage(14);
     doc.setFillColor(...C.accentLight);
-    doc.roundedRect(ML, y, CW, 9, 1.5, 1.5, 'F');
-    doc.setDrawColor(...C.accentBlue); doc.setLineWidth(0.4);
-    doc.roundedRect(ML, y, CW, 9, 1.5, 1.5, 'S');
-    doc.setFontSize(9); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.accentBlue);
-    doc.text(safe(text), ML + 4, y + 6.2);
+    doc.roundedRect(ML, y, CW, 8, 1, 1, 'F');
+    doc.setDrawColor(...C.accentBlue); doc.setLineWidth(0.3);
+    doc.roundedRect(ML, y, CW, 8, 1, 1, 'S');
+    doc.setFontSize(8.5); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.accentBlue);
+    doc.text(safe(text), ML + 4, y + 5.6);
     doc.setFont(undefined, 'normal');
-    y += 13;
+    y += 12;
   }
 
-  // ── COVER ─────────────────────────────────────────────────
+  // ── COVER PAGE ──────────────────────────────────────────────
   doc.setFillColor(...C.white);
   doc.rect(0, 0, PW, PH, 'F');
 
-  // top band
+  // Hero band
   doc.setFillColor(...C.headerBg);
-  doc.rect(0, 0, PW, 58, 'F');
+  doc.rect(0, 0, PW, 65, 'F');
 
-  // circle logo
-  doc.setFillColor(59, 130, 246);
-  doc.circle(PW/2, 30, 17, 'F');
-  doc.setFontSize(16); doc.setFont(undefined,'bold'); doc.setTextColor(...C.white);
-  doc.text('OT', PW/2, 34.5, { align: 'center' });
+  // Circle logo
+  doc.setFillColor(...C.accentStripe);
+  doc.circle(PW / 2, 32, 18, 'F');
+  doc.setFontSize(17); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.white);
+  doc.text('OT', PW / 2, 36.5, { align: 'center' });
 
-  // title
-  doc.setFontSize(22); doc.setFont(undefined,'bold'); doc.setTextColor(...C.bodyText);
-  doc.text('Daily Challenge Report', PW/2, 78, { align: 'center' });
-  doc.setFontSize(10); doc.setFont(undefined,'normal'); doc.setTextColor(...C.muted);
-  doc.text('OmegaTest Platform  |  Admin Confidential Report', PW/2, 87, { align: 'center' });
+  // Title block
+  doc.setFontSize(24); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.bodyText);
+  doc.text('Daily Challenge Report', PW / 2, 85, { align: 'center' });
+  doc.setFontSize(10); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.muted);
+  doc.text('OmegaTest Platform  |  Admin Confidential Report', PW / 2, 94, { align: 'center' });
 
-  doc.setDrawColor(...C.border); doc.setLineWidth(0.3);
-  doc.line(ML, 93, PW-MR, 93);
+  doc.setDrawColor(...C.lightBorder); doc.setLineWidth(0.3);
+  doc.line(ML + 20, 100, PW - MR - 20, 100);
 
   // KPI boxes
   const totalCh  = items.length;
-  const totalQ   = items.reduce((s,i) => s + i.questions.length, 0);
-  const totalAtt = items.reduce((s,i) => s + i.attempts.length,  0);
+  const totalQ   = items.reduce((s, i) => s + i.questions.length, 0);
+  const totalAtt = items.reduce((s, i) => s + i.attempts.length, 0);
   const overallAvg = totalAtt
-    ? +(items.flatMap(i=>i.attempts).reduce((s,a)=>s+ +a.percentage,0)/totalAtt).toFixed(1)
+    ? +(items.flatMap(i => i.attempts).reduce((s, a) => s + +a.percentage, 0) / totalAtt).toFixed(1)
     : 0;
 
   const kpis = [
-    { label: 'Challenges', value: String(totalCh),    color: C.accentBlue },
-    { label: 'Questions',  value: String(totalQ),     color: C.green      },
-    { label: 'Attempts',   value: String(totalAtt),   color: C.yellow     },
-    { label: 'Avg Score',  value: overallAvg + '%',   color: C.red        },
+    { label: 'Challenges', value: String(totalCh),  color: C.accentBlue },
+    { label: 'Questions',  value: String(totalQ),   color: C.green      },
+    { label: 'Attempts',   value: String(totalAtt), color: C.yellow     },
+    { label: 'Avg Score',  value: overallAvg + '%', color: C.red        },
   ];
-  const bw = (CW - 9) / 4;
+  const bw = (CW - 12) / 4;
   kpis.forEach((k, i) => {
-    const bx = ML + i * (bw + 3);
+    const bx = ML + i * (bw + 4);
     doc.setFillColor(...C.statBg);
-    doc.roundedRect(bx, 100, bw, 28, 2, 2, 'F');
-    doc.setDrawColor(...k.color); doc.setLineWidth(0.6);
-    doc.roundedRect(bx, 100, bw, 28, 2, 2, 'S');
-    doc.setFontSize(15); doc.setFont(undefined,'bold'); doc.setTextColor(...k.color);
-    doc.text(k.value, bx + bw/2, 113, { align: 'center' });
-    doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...C.muted);
-    doc.text(k.label, bx + bw/2, 121, { align: 'center' });
+    doc.roundedRect(bx, 108, bw, 30, 2, 2, 'F');
+    doc.setDrawColor(...k.color); doc.setLineWidth(0.5);
+    doc.roundedRect(bx, 108, bw, 30, 2, 2, 'S');
+    // color top accent bar
+    doc.setFillColor(...k.color);
+    doc.roundedRect(bx, 108, bw, 3, 2, 2, 'F');
+    doc.rect(bx, 110, bw, 1, 'F'); // square bottom of accent
+    doc.setFontSize(16); doc.setFont(undefined, 'bold'); doc.setTextColor(...k.color);
+    doc.text(k.value, bx + bw / 2, 123, { align: 'center' });
+    doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.muted);
+    doc.text(k.label, bx + bw / 2, 131, { align: 'center' });
   });
 
-  // ToC
-  doc.setFontSize(10); doc.setFont(undefined,'bold'); doc.setTextColor(...C.bodyText);
-  doc.text('Challenges in this report:', ML, 142);
-  doc.setFont(undefined,'normal'); doc.setFontSize(8.5);
-  items.slice(0, 26).forEach((item, i) => {
-    const cy = 150 + i * 7;
+  // Table of contents
+  doc.setFontSize(10); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.bodyText);
+  doc.text('Challenges in this Report:', ML, 152);
+  doc.setFont(undefined, 'normal'); doc.setFontSize(8.5);
+  items.slice(0, 24).forEach((item, i) => {
+    const cy = 161 + i * 8;
     if (cy > PH - 20) return;
+    // row bg alternating
+    if (i % 2 === 0) {
+      doc.setFillColor(...C.rowEven);
+      doc.rect(ML, cy - 5, CW, 7.5, 'F');
+    }
     doc.setTextColor(...C.muted);
-    doc.text((i+1) + '.', ML, cy);
+    doc.text(String(i + 1) + '.', ML + 2, cy);
     doc.setTextColor(...C.bodyText);
-    doc.text(safe(item.challenge.title || 'Daily Challenge'), ML + 7, cy);
+    doc.text(safe(item.challenge.title || 'Daily Challenge'), ML + 10, cy);
     doc.setTextColor(...C.muted);
-    doc.text(item.challenge.challenge_date || '', PW-MR, cy, { align: 'right' });
+    doc.text(item.challenge.challenge_date || '', PW - MR, cy, { align: 'right' });
   });
-  if (items.length > 26) {
+  if (items.length > 24) {
     doc.setFontSize(7.5); doc.setTextColor(...C.muted);
-    doc.text('... and ' + (items.length - 26) + ' more challenges', ML, 150 + 26*7);
+    doc.text('... and ' + (items.length - 24) + ' more challenges', ML, 161 + 24 * 8);
   }
 
-  doc.setFontSize(7); doc.setTextColor(...C.muted);
-  doc.text('CONFIDENTIAL  |  OmegaTest Admin Report  |  ' + new Date().toLocaleDateString('en-IN'),
-    PW/2, PH-8, { align: 'center' });
+  doc.setFontSize(6.5); doc.setTextColor(...C.muted);
+  doc.text(
+    'CONFIDENTIAL  |  OmegaTest Admin Report  |  ' + new Date().toLocaleDateString('en-IN'),
+    PW / 2, PH - 8, { align: 'center' }
+  );
 
-  // ── PER-CHALLENGE PAGES ────────────────────────────────────
+  // ── PER-CHALLENGE PAGES ─────────────────────────────────────
   items.forEach(({ challenge, questions, attempts }) => {
     newPage();
 
-    // Challenge header
+    // ── Challenge header card ────────────────────────────────
+    const headerH = 24;
     doc.setFillColor(...C.headerBg);
-    doc.roundedRect(ML, y, CW, 21, 2, 2, 'F');
-    doc.setFontSize(13); doc.setFont(undefined,'bold'); doc.setTextColor(...C.white);
-    doc.text(safe(challenge.title || 'Daily Challenge'), ML+4, y+8);
-    doc.setFontSize(7.5); doc.setFont(undefined,'normal');
-    const meta = [
-      'Date: ' + (challenge.challenge_date||''),
+    doc.roundedRect(ML, y, CW, headerH, 2, 2, 'F');
+
+    // Left accent stripe on header
+    doc.setFillColor(...C.accentStripe);
+    doc.roundedRect(ML, y, 4, headerH, 2, 2, 'F');
+    doc.rect(ML + 2, y, 2, headerH, 'F');
+
+    doc.setFontSize(12); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.white);
+    doc.text(safe(challenge.title || 'Daily Challenge'), ML + 8, y + 9);
+
+    doc.setFontSize(7); doc.setFont(undefined, 'normal'); doc.setTextColor(180, 210, 255);
+    const metaParts = [
+      'Date: ' + (challenge.challenge_date || ''),
       'Questions: ' + questions.length,
-      'Time: ' + (challenge.time_limit_minutes||15) + ' min',
-      'Difficulty: ' + safe(challenge.difficulty||'medium'),
-    ].join('   |   ');
-    doc.text(meta, ML+4, y+16);
-    y += 25;
+      'Time: ' + (challenge.time_limit_minutes || 15) + ' min',
+      'Difficulty: ' + safe(challenge.difficulty || 'medium'),
+    ];
+    doc.text(metaParts.join('   |   '), ML + 8, y + 17);
 
-    if ((challenge.topics||[]).length) {
-      doc.setFontSize(7.5); doc.setTextColor(...C.muted);
-      doc.text('Topics: ' + safe(challenge.topics.join(', ')), ML, y+4);
-      y += 9;
+    if ((challenge.topics || []).length) {
+      doc.setFontSize(6.5);
+      doc.text('Topics: ' + safe(challenge.topics.join(', ')), ML + 8, y + 22);
     }
+    y += headerH + 6;
 
-    // Stats
+    // ── Stats row ────────────────────────────────────────────
     const attCount = attempts.length;
-    const avgPct   = attCount ? +(attempts.reduce((s,a)=>s+ +a.percentage,0)/attCount).toFixed(1) : null;
-    const bestPct  = attCount ? Math.max(...attempts.map(a=> +a.percentage)) : null;
+    const avgPct   = attCount ? +(attempts.reduce((s, a) => s + +a.percentage, 0) / attCount).toFixed(1) : null;
+    const bestPct  = attCount ? Math.max(...attempts.map(a => +a.percentage)) : null;
 
     const stats = [
-      { label:'Total Attempts', value: String(attCount), color: C.accentBlue },
-      { label:'Avg Score',      value: avgPct!==null ? avgPct+'%' : 'N/A',
-        color: avgPct===null ? C.muted : avgPct>=70 ? C.green : avgPct>=50 ? C.yellow : C.red },
-      { label:'Best Score',     value: bestPct!==null ? bestPct+'%' : 'N/A', color: C.yellow },
+      { label: 'Total Attempts', value: String(attCount),                   color: C.accentBlue },
+      { label: 'Avg Score',      value: avgPct  !== null ? avgPct  + '%' : 'N/A',
+        color: avgPct === null ? C.muted : avgPct >= 70 ? C.green : avgPct >= 50 ? C.yellow : C.red },
+      { label: 'Best Score',     value: bestPct !== null ? bestPct + '%' : 'N/A', color: C.yellow },
     ];
-    const sw = (CW - 6) / 3;
-    checkPage(20);
-    stats.forEach((s2,i) => {
-      const bx = ML + i*(sw+3);
+    const sw = (CW - 8) / 3;
+    checkPage(22);
+    stats.forEach((s2, i) => {
+      const bx = ML + i * (sw + 4);
       doc.setFillColor(...C.statBg);
       doc.roundedRect(bx, y, sw, 16, 1.5, 1.5, 'F');
-      doc.setDrawColor(...C.border); doc.setLineWidth(0.3);
+      doc.setDrawColor(...C.border); doc.setLineWidth(0.25);
       doc.roundedRect(bx, y, sw, 16, 1.5, 1.5, 'S');
-      doc.setFontSize(12); doc.setFont(undefined,'bold'); doc.setTextColor(...s2.color);
-      doc.text(s2.value, bx+sw/2, y+9, { align:'center' });
-      doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(...C.muted);
-      doc.text(s2.label, bx+sw/2, y+14, { align:'center' });
+      doc.setFontSize(11); doc.setFont(undefined, 'bold'); doc.setTextColor(...s2.color);
+      doc.text(s2.value, bx + sw / 2, y + 9, { align: 'center' });
+      doc.setFontSize(6.5); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.muted);
+      doc.text(s2.label, bx + sw / 2, y + 14, { align: 'center' });
     });
-    y += 20;
+    y += 22;
 
-    // ── Questions ────────────────────────────────────────────
+    // ── Questions section ────────────────────────────────────
     sectionBand('Questions  (' + questions.length + ')');
 
-    const LH = 4.8;
+    // Layout constants
+    const LH     = 5.0;    // line height mm
+    const INNER  = ML + 5; // left text margin inside card
+    const TEXTW  = CW - 10; // available width for question text
+
+    // Option column geometry — two columns with proper margin
+    const OPT_PAD  = 3;    // padding inside option box
+    const OPT_GAP  = 4;    // gap between left and right columns
+    const OPT_W    = (CW - OPT_GAP - 10) / 2;   // each option box width
+    const OPT_TEXTW = OPT_W - OPT_PAD * 2 - 3;  // max text width inside option
+    const OPT_L_X  = ML + 5;                      // left column x
+    const OPT_R_X  = OPT_L_X + OPT_W + OPT_GAP; // right column x
 
     questions.forEach((q, qi) => {
-      const qLines   = doc.splitTextToSize('Q' + (qi+1) + '.  ' + safe(q.question_text), CW - 10);
-      const optLines = ['A','B','C','D'].map(l =>
-        doc.splitTextToSize(l + '.  ' + safe(q['option_'+l.toLowerCase()]||''), CW/2 - 14)
-      );
+      // ── Pre-compute all line splits ──────────────────────
+      const qLines   = doc.splitTextToSize(safe(q.question_text || ''), TEXTW - 3);
+
+      // Each option: letter prefix + text, wrapped to column width
+      const optLines = ['A', 'B', 'C', 'D'].map(l => {
+        const prefix = l + '.  ';
+        const text   = safe(q['option_' + l.toLowerCase()] || '');
+        return doc.splitTextToSize(prefix + text, OPT_TEXTW);
+      });
+
       const expLines = q.explanation
-        ? doc.splitTextToSize('Explanation:  ' + safe(q.explanation), CW - 14)
+        ? doc.splitTextToSize('Explanation: ' + safe(q.explanation), TEXTW - 6)
         : [];
 
-        // row heights for the 2x2 option grid — add 1 extra LH for the "✔ Correct" tag line
-        const rowH1 = Math.max(optLines[0].length, optLines[1].length) * LH + LH + 6;
-        const rowH2 = Math.max(optLines[2].length, optLines[3].length) * LH + LH + 6;
-      const expH  = expLines.length ? expLines.length * LH + 8 : 0;
-      const topH  = q.topic ? 8 : 0;
-      const cardH = qLines.length * LH + 8 + rowH1 + rowH2 + expH + topH + 10;
-
-      checkPage(cardH + 5);
-
-      // white card with border
-      doc.setFillColor(...C.white);
-      doc.setDrawColor(...C.border); doc.setLineWidth(0.4);
-      doc.roundedRect(ML, y, CW, cardH, 2, 2, 'FD');
-
-      // left accent stripe
-      doc.setFillColor(...C.accentBlue);
-      doc.rect(ML, y, 3, cardH, 'F');
-
-      // Q badge
-      doc.setFillColor(...C.accentBlue);
-      doc.roundedRect(ML+5, y+3, 16, 7, 1.5, 1.5, 'F');
-      doc.setFontSize(7); doc.setFont(undefined,'bold'); doc.setTextColor(...C.white);
-      doc.text('Q'+(qi+1), ML+13, y+7.5, { align:'center' });
-
-      // topic badge
-      if (q.topic) {
-        const tText = safe(q.topic);
-        const tW = doc.getTextWidth(tText) + 8;
-        doc.setFillColor(...C.badgeBg);
-        doc.roundedRect(PW-MR-tW, y+3, tW, 7, 1.5, 1.5, 'F');
-        doc.setFontSize(6.5); doc.setFont(undefined,'normal'); doc.setTextColor(...C.badgeText);
-        doc.text(tText, PW-MR-tW/2, y+7.5, { align:'center' });
-      }
-
-      // question text
-      let ty = y + 13;
-      doc.setFontSize(9); doc.setFont(undefined,'bold'); doc.setTextColor(...C.bodyText);
-      qLines.forEach(line => { doc.text(line, ML+6, ty); ty += LH; });
-      ty += 3;
-
-      // options: 2 per row
-      const colW = CW/2 - 9;
-      [
-        { li: 0, ri: 1 },
-        { li: 2, ri: 3 },
-      ].forEach(({ li, ri }) => {
+      // Height for each option row (pair of options side by side)
+      // +1 line for the [Correct Answer] tag if either option in the pair is correct
+      const pairCorrect = (li, ri) => {
         const ll = ['A','B','C','D'][li];
         const rl = ['A','B','C','D'][ri];
+        return ll === q.correct_answer || rl === q.correct_answer;
+      };
+      const optRowH = (li, ri) => {
+        const maxLines = Math.max(optLines[li].length, optLines[ri].length);
+        const extra    = pairCorrect(li, ri) ? LH : 0;
+        return maxLines * LH + extra + OPT_PAD * 2;
+      };
+      const row1H = optRowH(0, 1);
+      const row2H = optRowH(2, 3);
+      const expH  = expLines.length ? expLines.length * LH + 8 : 0;
+
+      // Badge row: Q number + topic  (14 mm)
+      // Question text block
+      // Option rows  + 3mm gap between them
+      // Explanation
+      // Bottom padding 4mm
+      const BADGE_H = 12;
+      const cardH   = BADGE_H + qLines.length * LH + 4 + row1H + 3 + row2H + expH + 6;
+
+      checkPage(cardH + 4);
+
+      const cardY = y;
+
+      // ── Card background + border ──────────────────────────
+      doc.setFillColor(...C.cardBg);
+      doc.setDrawColor(...C.lightBorder); doc.setLineWidth(0.3);
+      doc.roundedRect(ML, cardY, CW, cardH, 2, 2, 'FD');
+
+      // Left accent stripe (full card height)
+      doc.setFillColor(...C.accentStripe);
+      doc.rect(ML, cardY, 3, cardH, 'F');
+
+      // ── Q-number badge ────────────────────────────────────
+      const qBadgeW = doc.getStringUnitWidth('Q' + (qi + 1)) *
+                       doc.getFontSize() / doc.internal.scaleFactor + 8;
+      doc.setFontSize(7); doc.setFont(undefined, 'bold');
+      const qBW = Math.max(14, qBadgeW);
+      doc.setFillColor(...C.accentBlue);
+      doc.roundedRect(ML + 5, cardY + 3, qBW, 6.5, 1, 1, 'F');
+      doc.setTextColor(...C.white);
+      doc.text('Q' + (qi + 1), ML + 5 + qBW / 2, cardY + 7.5, { align: 'center' });
+
+      // ── Topic badge (right side) ──────────────────────────
+      if (q.topic) {
+        const tText = safe(q.topic);
+        doc.setFontSize(6);
+        const tW = doc.getStringUnitWidth(tText) * doc.getFontSize() / doc.internal.scaleFactor + 8;
+        doc.setFillColor(...C.badgeBg);
+        doc.roundedRect(ML + CW - tW - 5, cardY + 3, tW, 6.5, 1, 1, 'F');
+        doc.setTextColor(...C.badgeText);
+        doc.text(tText, ML + CW - 5 - tW / 2, cardY + 7.5, { align: 'center' });
+      }
+
+      // ── Question text ─────────────────────────────────────
+      let ty = cardY + BADGE_H;
+      doc.setFontSize(9); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.bodyText);
+      qLines.forEach(line => {
+        doc.text(line, INNER, ty);
+        ty += LH;
+      });
+      ty += 3; // gap before options
+
+      // ── Option pairs ─────────────────────────────────────
+      [[0, 1], [2, 3]].forEach(([li, ri], pairIdx) => {
+        const ll     = ['A', 'B', 'C', 'D'][li];
+        const rl     = ['A', 'B', 'C', 'D'][ri];
         const lLines = optLines[li];
         const rLines = optLines[ri];
-        const rh = Math.max(lLines.length, rLines.length) * LH + LH + 5;
+        const rh     = pairIdx === 0 ? row1H : row2H;
 
-        [
-          { letter: ll, lines: lLines, ox: ML+6       },
-          { letter: rl, lines: rLines, ox: ML+CW/2+4  },
-        ].forEach(({ letter, lines, ox }) => {
+        // Draw left option box
+        [{letter: ll, lines: lLines, ox: OPT_L_X},
+         {letter: rl, lines: rLines, ox: OPT_R_X}
+        ].forEach(({letter, lines, ox}) => {
           const isCorrect = letter === q.correct_answer;
+
+          // Box fill and border
           if (isCorrect) {
             doc.setFillColor(...C.greenLight);
             doc.setDrawColor(...C.greenBorder);
+            doc.setLineWidth(0.5);
           } else {
             doc.setFillColor(...C.optBg);
-            doc.setDrawColor(...C.border);
+            doc.setDrawColor(...C.lightBorder);
+            doc.setLineWidth(0.25);
           }
-          doc.setLineWidth(0.35);
-          doc.roundedRect(ox, ty-1, colW, rh, 1.5, 1.5, 'FD');
+          doc.roundedRect(ox, ty, OPT_W, rh, 1.5, 1.5, 'FD');
 
+          // Option text
           doc.setFontSize(8.5);
           doc.setFont(undefined, isCorrect ? 'bold' : 'normal');
-          doc.setTextColor(...(isCorrect ? C.green : C.bodyText));
-          lines.forEach((line, k) => { doc.text(line, ox+3, ty + k*LH + 3); });
+          doc.setTextColor(...(isCorrect ? C.greenText : C.subText));
+          lines.forEach((line, k) => {
+            doc.text(line, ox + OPT_PAD, ty + OPT_PAD + k * LH + 1.5);
+          });
+
+          // Correct answer label — on its own dedicated line after text
           if (isCorrect) {
-            // Draw (Correct) tag on its own line below option text, safely within box
-            const tagY = ty + lines.length * LH + 2;
-            doc.setFontSize(7.5); doc.setFont(undefined,'bold');
-            doc.setTextColor(...C.green);
-            doc.text('✔ Correct', ox + 3, tagY);
+            const tagY = ty + OPT_PAD + lines.length * LH + 1;
+            // small green pill background
+            const lblW = doc.getStringUnitWidth(CORRECT_LABEL) *
+                         8.5 / doc.internal.scaleFactor + 6;
+            doc.setFillColor(...C.green);
+            doc.roundedRect(ox + OPT_PAD, tagY - 3.5, lblW, 5, 1, 1, 'F');
+            doc.setFontSize(6.5); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.white);
+            doc.text(CORRECT_LABEL, ox + OPT_PAD + lblW / 2, tagY, { align: 'center' });
           }
         });
-        ty += rh + 2;
+
+        ty += rh + 3; // gap between option rows
       });
 
-      // explanation
+      // ── Explanation box ───────────────────────────────────
       if (expLines.length) {
+        const expBoxH = expLines.length * LH + 7;
         doc.setFillColor(...C.expBg);
-        doc.setDrawColor(...C.expBorder); doc.setLineWidth(0.35);
-        doc.roundedRect(ML+6, ty+1, CW-12, expLines.length*LH+6, 1.5, 1.5, 'FD');
-        doc.setFontSize(8); doc.setFont(undefined,'italic'); doc.setTextColor(...C.expText);
-        expLines.forEach((line, k) => { doc.text(line, ML+9, ty + LH + k*LH + 1); });
-        ty += expLines.length*LH + 8;
+        doc.setDrawColor(...C.expBorder); doc.setLineWidth(0.3);
+        doc.roundedRect(INNER, ty, CW - 10, expBoxH, 1.5, 1.5, 'FD');
+
+        // "Explanation:" label
+        doc.setFontSize(7); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.expText);
+        doc.text('Explanation:', INNER + 3, ty + 4.5);
+
+        doc.setFontSize(7.5); doc.setFont(undefined, 'normal');
+        expLines.forEach((line, k) => {
+          doc.text(line, INNER + 3, ty + 5 + (k + 1) * LH - 0.5);
+        });
+        ty += expBoxH + 3;
       }
 
-      y += cardH + 5;
+      y += cardH + 4; // advance to next card
     });
 
-    // ── Attempts table ───────────────────────────────────────
+    // ── Student Attempts table ───────────────────────────────
     if (attempts.length > 0) {
-      checkPage(24);
+      checkPage(28);
       sectionBand('Student Attempts  (' + attempts.length + ')');
 
+      // Column definitions
       const cols = [
-        { label:'Student', x: ML,      w: 56 },
-        { label:'Score',   x: ML+59,   w: 32 },
-        { label:'Time',    x: ML+94,   w: 26 },
-        { label:'Date',    x: ML+123,  w: 34 },
-        { label:'Result',  x: ML+160,  w: 32 },
+        { label: 'Student', x: ML,       w: 55 },
+        { label: 'Score',   x: ML + 57,  w: 35 },
+        { label: 'Time',    x: ML + 94,  w: 28 },
+        { label: 'Date',    x: ML + 124, w: 34 },
+        { label: 'Result',  x: ML + 160, w: 38 },
       ];
 
+      // Header row
       checkPage(10);
       doc.setFillColor(...C.headerBg);
       doc.rect(ML, y, CW, 8, 'F');
-      doc.setFontSize(7.5); doc.setFont(undefined,'bold'); doc.setTextColor(...C.white);
-      cols.forEach(col => doc.text(col.label, col.x+2, y+5.5));
+      doc.setFontSize(7); doc.setFont(undefined, 'bold'); doc.setTextColor(...C.white);
+      cols.forEach(col => doc.text(col.label, col.x + 2, y + 5.5));
       y += 9;
 
-      attempts.slice(0,50).forEach((att, ai) => {
+      attempts.slice(0, 50).forEach((att, ai) => {
         checkPage(8);
-        doc.setFillColor(...(ai%2===0 ? C.rowEven : C.white));
+        doc.setFillColor(...(ai % 2 === 0 ? C.rowEven : C.white));
         doc.rect(ML, y, CW, 7.5, 'F');
-        doc.setDrawColor(...C.border); doc.setLineWidth(0.2);
-        doc.line(ML, y+7.5, ML+CW, y+7.5);
+        doc.setDrawColor(...C.lightBorder); doc.setLineWidth(0.2);
+        doc.line(ML, y + 7.5, ML + CW, y + 7.5);
 
         const pct    = +att.percentage;
-        const pColor = pct>=70 ? C.green : pct>=50 ? C.yellow : C.red;
-        const name   = safe(att._profile?._displayName || att._profile?.full_name || ('Student #' + att.user_id.slice(0, 8)));
+        const pColor = pct >= 70 ? C.green : pct >= 50 ? C.yellow : C.red;
+        const name   = safe(
+          att._profile?._displayName ||
+          att._profile?.full_name    ||
+          ('Student #' + att.user_id.slice(0, 8))
+        );
 
-        doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...C.bodyText);
-        doc.text(doc.splitTextToSize(name, 54)[0], cols[0].x+2, y+5);
-        doc.setFont(undefined,'bold'); doc.setTextColor(...pColor);
-        doc.text(pct+'%  ('+att.score+'/'+att.total_questions+')', cols[1].x+2, y+5);
-        doc.setFont(undefined,'normal'); doc.setTextColor(...C.muted);
-        doc.text(fmtDuration(att.time_taken_secs), cols[2].x+2, y+5);
-        doc.text(att.submitted_at ? new Date(att.submitted_at).toLocaleDateString('en-IN') : '—', cols[3].x+2, y+5);
+        doc.setFontSize(7.5); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.bodyText);
+        doc.text(doc.splitTextToSize(name, cols[0].w - 2)[0], cols[0].x + 2, y + 5);
+        doc.setFont(undefined, 'bold'); doc.setTextColor(...pColor);
+        doc.text(pct + '%  (' + att.score + '/' + att.total_questions + ')', cols[1].x + 2, y + 5);
+        doc.setFont(undefined, 'normal'); doc.setTextColor(...C.muted);
+        doc.text(fmtDuration(att.time_taken_secs), cols[2].x + 2, y + 5);
+        doc.text(
+          att.submitted_at ? new Date(att.submitted_at).toLocaleDateString('en-IN') : '--',
+          cols[3].x + 2, y + 5
+        );
         doc.setTextColor(...pColor);
-        doc.text(pct>=70?'Excellent':pct>=50?'Good':'Needs Work', cols[4].x+2, y+5);
+        doc.text(pct >= 70 ? 'Excellent' : pct >= 50 ? 'Good' : 'Needs Work', cols[4].x + 2, y + 5);
         y += 7.5;
       });
 
       if (attempts.length > 50) {
         checkPage(8);
         doc.setFontSize(7); doc.setTextColor(...C.muted);
-        doc.text('... and ' + (attempts.length-50) + ' more attempts not shown.', ML, y+5);
+        doc.text('... and ' + (attempts.length - 50) + ' more attempts not shown.', ML, y + 5);
         y += 8;
       }
-      y += 4;
+      y += 5;
     }
   });
 
-  // ── Page numbers & footer ─────────────────────────────────
+  // ── Page numbers + footer bar ───────────────────────────────
   const pc = doc.internal.getNumberOfPages();
   for (let i = 1; i <= pc; i++) {
     doc.setPage(i);
     doc.setFillColor(...C.headerBg);
-    doc.rect(0, PH-8, PW, 8, 'F');
-    doc.setFontSize(7); doc.setFont(undefined,'normal'); doc.setTextColor(...C.white);
-    doc.text('OmegaTest  |  Daily Challenge Report', ML, PH-3);
-    doc.text('Page ' + i + ' of ' + pc, PW-MR, PH-3, { align: 'right' });
+    doc.rect(0, PH - 8, PW, 8, 'F');
+    doc.setFontSize(6.5); doc.setFont(undefined, 'normal'); doc.setTextColor(...C.white);
+    doc.text('OmegaTest  |  Daily Challenge Report', ML, PH - 3);
+    doc.text('Page ' + i + ' of ' + pc, PW - MR, PH - 3, { align: 'right' });
   }
 
   return doc;
