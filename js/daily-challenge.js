@@ -772,26 +772,35 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
       10000, 'deleting old questions'
     );
   } else {
-    // Insert and immediately retrieve the new row id in one round-trip.
-    // Requires: INSERT WITH CHECK policy + SELECT policy for admins on daily_challenges.
-    const { data: insertedRow, error: insertErr } = await withTimeout(
+    // Step 1: INSERT without .select() — avoids the RETURNING clause triggering
+    // a separate RLS SELECT check that can deadlock/timeout when policies overlap.
+    const { error: insertErr } = await withTimeout(
       sb.from('daily_challenges')
         .insert({
           title, topics, challenge_date: date, question_count: questions.length,
           time_limit_minutes: timeLim, difficulty,
           is_active: isScheduled ? false : true,
-        })
-        .select('id')
-        .single(),
+        }),
       15000, 'inserting daily_challenges'
     );
     if (insertErr) {
       const detail = insertErr.code ? ` [${insertErr.code}]` : '';
       throw new Error('DB insert failed' + detail + ': ' + insertErr.message +
-        '. Fix: 1) Add "Admins insert challenges" policy WITH CHECK on daily_challenges,' +
-        ' 2) Add "Admins read all challenges" SELECT policy, 3) Check for duplicate challenge_date.');
+        '. Ensure "Admins insert challenges" WITH CHECK policy exists on daily_challenges.');
     }
-    if (!insertedRow?.id) throw new Error('Insert OK but no id returned — add "Admins read all challenges" SELECT policy.');
+
+    // Step 2: Fetch the row we just inserted by challenge_date (unique constraint).
+    // Doing this as a separate query avoids the RETURNING/RLS timeout entirely.
+    const { data: insertedRow, error: selectErr } = await withTimeout(
+      sb.from('daily_challenges')
+        .select('id')
+        .eq('challenge_date', date)
+        .single(),
+      10000, 'fetching inserted daily_challenge id'
+    );
+    if (selectErr || !insertedRow?.id) {
+      throw new Error('Challenge saved but could not retrieve its ID — ensure "Admins read all challenges" SELECT policy exists.');
+    }
     challengeId = insertedRow.id;
   }
 
