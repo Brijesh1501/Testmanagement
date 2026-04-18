@@ -33,7 +33,7 @@ function closeMobileSidebar() {
 }
 
 function navigateTo(page) {
-  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics', 'admin-daily-challenge'];
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics', 'admin-daily-challenge', 'admin-dc-analytics'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
     showToast('Access denied — admin only.', 'error');
     navigateTo('dashboard');
@@ -52,21 +52,23 @@ function navigateTo(page) {
   if (navEl)   navEl.classList.add('active');
 
   // Destroy charts when leaving analytics page
-  if (page !== 'analytics' && page !== 'admin-analytics') destroyAllCharts();
+  if (page !== 'analytics' && page !== 'admin-analytics' && page !== 'dc-analytics' && page !== 'admin-dc-analytics') destroyAllCharts();
 
   const loaders = {
-    'dashboard':         loadDashboard,
-    'tests':             loadTestSeries,
-    'results':           loadResults,
-    'profile':           loadProfile,
-    'analytics':         loadAnalytics,
+    'dashboard':              loadDashboard,
+    'tests':                  loadTestSeries,
+    'results':                loadResults,
+    'profile':                loadProfile,
+    'analytics':              loadAnalytics,
+    'dc-analytics':           loadDCAnalytics,
+    'daily-challenge':        loadDailyChallengeFullPage,
     'admin-dashboard':        loadAdminDashboard,
     'admin-users':            loadAdminUsers,
     'admin-series':           loadAdminSeries,
     'admin-questions':        loadAdminQuestions,
     'admin-analytics':        loadAdminAnalytics,
     'admin-daily-challenge':  loadAdminDailyChallenge,
-    'daily-challenge':        loadDailyChallengeFullPage,
+    'admin-dc-analytics':     loadDCAnalytics,
   };
   if (loaders[page]) loaders[page]();
 }
