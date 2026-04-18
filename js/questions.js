@@ -19,8 +19,21 @@ function openAddQuestionModal() {
 
 // ─── Edit question ───────────────────────────────────────────
 async function editQuestion(id) {
-  const { data: q } = await sb.from('questions').select('*').eq('id', id).single();
-  await loadAdminQuestions();
+  // Fetch the question and series list in parallel — never re-fetch all questions
+  const [{ data: q }, { data: series }] = await Promise.all([
+    sb.from('questions').select('*').eq('id', id).single(),
+    sb.from('test_series').select('id,name').order('name'),
+  ]);
+
+  if (!q) { showToast('Question not found.', 'error'); return; }
+
+  // Keep the series dropdown in sync without triggering a full table reload
+  const opts = (series || []).map(s =>
+    `<option value="${s.id}" ${s.id === q.series_id ? 'selected' : ''}>${s.name}</option>`
+  ).join('');
+  const seriesSel = document.getElementById('question-series');
+  if (seriesSel) seriesSel.innerHTML = `<option value="">Select series...</option>` + opts;
+
   document.getElementById('question-modal-title').textContent = 'Edit Question';
   document.getElementById('question-edit-id').value           = id;
   document.getElementById('question-text-input').value        = q.question;
@@ -75,12 +88,23 @@ async function uploadQuestionImage(file) {
 // ─── Save question ───────────────────────────────────────────
 async function saveQuestion(e) {
   e.preventDefault();
-  const editId = document.getElementById('question-edit-id').value;
+  const editId  = document.getElementById('question-edit-id').value;
+  const saveBtn = e.submitter || document.querySelector('#add-question-modal button[type="submit"]');
+  const origText = saveBtn?.textContent || 'Save';
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
+
   let imageUrl = document.getElementById('q-current-image-url').value || null;
 
   if (questionImageFile) {
-    try { showToast('Uploading image…', 'info'); imageUrl = await uploadQuestionImage(questionImageFile); }
-    catch (err) { showToast(err.message, 'error'); return; }
+    try {
+      if (saveBtn) saveBtn.textContent = 'Uploading image…';
+      showToast('Uploading image…', 'info');
+      imageUrl = await uploadQuestionImage(questionImageFile);
+    } catch (err) {
+      showToast(err.message, 'error');
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = origText; }
+      return;
+    }
   }
 
   const payload = {
@@ -99,12 +123,24 @@ async function saveQuestion(e) {
     ? sb.from('questions').update(payload).eq('id', editId)
     : sb.from('questions').insert(payload);
   const { error } = await query;
-  if (error) { showToast('Error: ' + error.message, 'error'); return; }
+  if (error) {
+    showToast('Error: ' + error.message, 'error');
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = origText; }
+    return;
+  }
 
   closeModal('add-question-modal');
-  loadAdminQuestions();
   showToast(editId ? 'Question updated!' : 'Question added!', 'success');
   questionImageFile = null;
+
+  // Only re-fetch the full question table if we're actually on the question bank page
+  if (document.getElementById('page-admin-questions')?.classList.contains('active')) {
+    loadAdminQuestions();
+  }
+  // If called from the reports page, just refresh the reports view
+  if (document.getElementById('page-admin-reports')?.classList.contains('active')) {
+    loadAdminReports();
+  }
 }
 
 // ─── Delete question ─────────────────────────────────────────
