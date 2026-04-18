@@ -117,6 +117,10 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21H3M21 21V3M9 21V9M15 21V5M3 21V13"/></svg>
         DC Analytics
       </a>
+      <a class="nav-item" id="nav-my-reports" onclick="navigateTo('my-reports')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        My Reports
+      </a>
       <a class="nav-item" id="nav-profile"   onclick="navigateTo('profile')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z"/></svg>Profile</a>
       <div id="admin-nav-section" style="display:none;margin-top:8px;">
         <div style="font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;padding:0 4px;">Admin</div>
@@ -127,6 +131,7 @@
         <a class="nav-item" id="nav-admin-analytics" onclick="navigateTo('admin-analytics')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21H3M21 21V3M9 21V9M15 21V5M3 21V13"/></svg>Admin Analytics</a>
         <a class="nav-item" id="nav-admin-daily-challenge" onclick="navigateTo('admin-daily-challenge')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>Daily Challenge</a>
         <a class="nav-item" id="nav-admin-dc-analytics" onclick="navigateTo('admin-dc-analytics')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21H3M21 21V3M9 21V9M15 21V5M3 21V13"/></svg>DC Analytics</a>
+        <a class="nav-item" id="nav-admin-reports" onclick="navigateTo('admin-reports')"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Question Reports</a>
       </div>
     </nav>
     <div style="padding:16px;border-top:1px solid var(--border);">
@@ -409,7 +414,31 @@
       </div>
     </div>
 
-    <!-- ADMIN DAILY CHALLENGE -->
+    <!-- MY REPORTS (Student) -->
+    <div id="page-my-reports" class="page">
+      <div style="margin-bottom:32px;">
+        <h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">My Reports</h1>
+        <p style="color:var(--muted);font-size:14px;">Track question issues you've reported and chat with admins</p>
+      </div>
+      <div id="my-reports-list"></div>
+    </div>
+
+    <!-- ADMIN REPORTS -->
+    <div id="page-admin-reports" class="page">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
+        <div>
+          <h1 style="font-size:26px;font-weight:800;margin-bottom:4px;">🚩 Question Reports</h1>
+          <p style="color:var(--muted);font-size:14px;">Review, comment on, and resolve reported question issues</p>
+        </div>
+        <button onclick="loadAdminReports()" class="btn-secondary" style="font-size:13px;padding:10px 18px;">↻ Refresh</button>
+      </div>
+      <div id="admin-reports-loading" style="text-align:center;padding:60px;color:var(--muted);">
+        <div style="font-size:32px;margin-bottom:12px;">🚩</div><p>Loading reports…</p>
+      </div>
+      <div id="admin-reports-content"></div>
+    </div>
+
+
     <div id="page-admin-daily-challenge" class="page">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:32px;flex-wrap:wrap;gap:12px;">
         <div>
@@ -501,6 +530,7 @@
         <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;">
           <button onclick="prevQuestion()"         class="btn-secondary" id="prev-btn">← Prev</button>
           <button onclick="clearCurrentResponse()" class="btn-warning"   id="clear-btn" style="opacity:0.4;" title="Clear your selected answer">✕ Clear</button>
+          <button id="report-q-btn" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:10px;padding:8px 14px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:5px;" title="Report an issue with this question">🚩</button>
           <button onclick="markForReview()"         class="btn-secondary" id="mark-btn" style="flex:1;">🔖 Mark for Review</button>
           <button onclick="nextQuestion()"          class="btn-primary"   id="next-btn">Next →</button>
           <button onclick="confirmSubmitTest()"     class="btn-primary"   id="submit-btn" style="display:none;background:linear-gradient(135deg,#10b981,#06b6d4);">Submit Test ✓</button>
@@ -620,7 +650,7 @@
       <div><label>Explanation (optional)</label><textarea id="q-explanation" class="input-field" rows="2"></textarea></div>
       <div style="display:flex;gap:10px;justify-content:flex-end;">
         <button type="button" onclick="closeModal('add-question-modal')" class="btn-secondary">Cancel</button>
-        <button type="submit" id="q-save-btn" class="btn-primary">Save Question</button>
+        <button type="submit" class="btn-primary">Save Question</button>
       </div>
     </form>
   </div>
@@ -793,6 +823,57 @@
   </div>
 </div>
 
+<!-- ════════════ REPORT QUESTION MODAL ════════════ -->
+<div id="report-modal" class="modal-overlay" style="display:none;">
+  <div class="modal" style="max-width:520px;width:95vw;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <div style="width:40px;height:40px;border-radius:10px;background:rgba(239,68,68,.15);display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;">🚩</div>
+      <div>
+        <h3 style="font-size:18px;font-weight:700;">Report a Question</h3>
+        <p style="font-size:12px;color:var(--muted);">Help us improve by flagging issues</p>
+      </div>
+      <button onclick="closeModal('report-modal')" style="margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;">×</button>
+    </div>
+
+    <input type="hidden" id="report-question-id">
+
+    <!-- Question preview -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:16px;">
+      <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px;">Question</div>
+      <p id="report-question-text" style="font-size:13px;line-height:1.5;color:var(--text);"></p>
+    </div>
+
+    <!-- Form -->
+    <div id="report-form-body">
+      <p id="report-modal-error" style="color:#f87171;font-size:12px;margin-bottom:10px;"></p>
+      <form onsubmit="submitQuestionReport(event)" style="display:flex;flex-direction:column;gap:14px;">
+        <div>
+          <label>Reason <span style="color:#ef4444;">*</span></label>
+          <select id="report-reason" class="input-field" required>
+            <option value="">Select a reason…</option>
+            ${REPORT_REASONS ? '' : ''}
+          </select>
+        </div>
+        <div>
+          <label>Additional details <span style="color:var(--muted);font-size:11px;">(optional)</span></label>
+          <textarea id="report-description" class="input-field" rows="3" placeholder="Describe the issue in more detail…" style="resize:vertical;"></textarea>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;">
+          <button type="button" onclick="closeModal('report-modal')" class="btn-secondary">Cancel</button>
+          <button type="submit" id="report-submit-btn" class="btn-primary" style="background:linear-gradient(135deg,#ef4444,#f59e0b);">Submit Report</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Success -->
+    <div id="report-success-msg" style="display:none;text-align:center;padding:24px 0;">
+      <div style="font-size:40px;margin-bottom:10px;">✅</div>
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Report Submitted!</div>
+      <p style="font-size:13px;color:var(--muted);">Thank you — our team will review it shortly.</p>
+    </div>
+  </div>
+</div>
+
 <!-- ════════════ DAILY CHALLENGE: GENERATE MODAL (Admin) ════════════ -->
 <div id="dc-generate-modal" class="modal-overlay" style="display:none;">
   <div class="modal" style="max-width:600px;width:95vw;max-height:92vh;overflow-y:auto;">
@@ -868,5 +949,19 @@
 <script src="js/pdf-import.js"></script>
 <script src="js/daily-challenge.js"></script>
 <script src="js/daily-challenge-analytics.js"></script>
+<script src="js/question-reports.js"></script>
+<script>
+// Populate report reason dropdown once DOM + REPORT_REASONS are available
+document.addEventListener('DOMContentLoaded', () => {
+  const sel = document.getElementById('report-reason');
+  if (sel && typeof REPORT_REASONS !== 'undefined') {
+    REPORT_REASONS.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.value; opt.textContent = r.label;
+      sel.appendChild(opt);
+    });
+  }
+});
+</script>
 </body>
 </html>
