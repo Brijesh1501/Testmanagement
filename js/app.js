@@ -33,7 +33,7 @@ function closeMobileSidebar() {
 }
 
 function navigateTo(page) {
-  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics', 'admin-daily-challenge', 'admin-dc-analytics'];
+  const adminPages = ['admin-dashboard', 'admin-users', 'admin-series', 'admin-questions', 'admin-user-detail', 'admin-analytics', 'admin-daily-challenge', 'admin-dc-analytics', 'admin-reports'];
   if (adminPages.includes(page) && currentProfile?.role !== 'admin') {
     showToast('Access denied — admin only.', 'error');
     navigateTo('dashboard');
@@ -69,6 +69,8 @@ function navigateTo(page) {
     'admin-analytics':        loadAdminAnalytics,
     'admin-daily-challenge':  loadAdminDailyChallenge,
     'admin-dc-analytics':     loadDCAnalytics,
+    'admin-reports':          loadAdminReports,
+    'my-reports':             loadMyReports,
   };
   if (loaders[page]) loaders[page]();
 }

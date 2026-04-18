@@ -70,6 +70,12 @@ function renderQuestion() {
 
   document.getElementById('clear-btn').style.opacity = answers[currentIndex] ? '1' : '0.4';
 
+  // Report button
+  const reportBtn = document.getElementById('report-q-btn');
+  if (reportBtn) {
+    reportBtn.onclick = () => openReportModal(q.id, q.question);
+  }
+
   const opts = document.getElementById('options-container');
   opts.innerHTML = ['A', 'B', 'C', 'D'].map(letter => {
     const text     = q['option_' + letter.toLowerCase()];
@@ -284,6 +290,16 @@ function showAnswerReview() {
           </div>`).join('')}
       </div>
       ${q.explanation ? `<div style="font-size:13px;color:#60a5fa;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;line-height:1.6;"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
+      ${!isCorrect && !skipped ? `
+        <div style="margin-top:10px;padding:8px 12px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:8px;font-size:12px;color:#10b981;">
+          ✅ <strong>Correct Answer:</strong> ${q.correct_answer || q.answer} — ${q['option_'+(q.correct_answer||q.answer).toLowerCase()] || ''}
+        </div>` : ''}
+      <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+        <button onclick="openReportModal('${q.id || q.question_id}', ${JSON.stringify(q.question_text || q.question)})"
+          style="font-size:11px;padding:5px 12px;background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:#f87171;border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:5px;">
+          🚩 Report Issue
+        </button>
+      </div>
     </div>`;
   }).join('');
 }
