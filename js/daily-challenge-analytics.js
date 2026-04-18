@@ -15,14 +15,20 @@ async function loadDCAnalytics() {
   const contentEl = document.getElementById(containerId);
   if (!contentEl) return;
 
+  // Show loading, hide + clear content
   if (loadingEl) loadingEl.style.display = '';
   contentEl.style.display = 'none';
-  contentEl.innerHTML = '';
+  contentEl.innerHTML = '<div style="padding:20px;color:var(--muted);font-size:13px;text-align:center;">Loading…</div>';
 
-  if (isAdmin) {
-    await loadAdminDCAnalytics(contentEl);
-  } else {
-    await loadStudentDCAnalytics(contentEl);
+  try {
+    if (isAdmin) {
+      await loadAdminDCAnalytics(contentEl);
+    } else {
+      await loadStudentDCAnalytics(contentEl);
+    }
+  } catch (err) {
+    contentEl.innerHTML = `<div style="color:#f87171;padding:24px;text-align:center;">Error loading analytics: ${err.message}</div>`;
+    console.error('DC Analytics error:', err);
   }
 
   if (loadingEl) loadingEl.style.display = 'none';
@@ -241,7 +247,13 @@ async function loadAdminDCAnalytics(container) {
       .in('id', uids);
     (profs || []).forEach(p => { profileMap[p.id] = p; });
   }
-  attempts.forEach(a => { a._profile = profileMap[a.user_id] || null; });
+  attempts.forEach(a => {
+    const prof = profileMap[a.user_id] || null;
+    if (prof && !prof._displayName) {
+      prof._displayName = prof.full_name || prof.email || ('Student …' + a.user_id.slice(-6));
+    }
+    a._profile = prof || { _displayName: 'Student …' + a.user_id.slice(-6) };
+  });
 
   // 4. Build per-challenge map
   const attByChallenge = {};
@@ -320,7 +332,8 @@ function buildDCLeaderboard(attempts) {
 
   const byStudent = {};
   attempts.forEach(a => {
-    if (!byStudent[a.user_id]) byStudent[a.user_id] = { name: a._profile?.full_name || a._profile?.email || 'Unknown', scores: [], dates: new Set() };
+    const displayName = a._profile?._displayName || a._profile?.full_name || a._profile?.email || ('Student …' + a.user_id.slice(-6));
+    if (!byStudent[a.user_id]) byStudent[a.user_id] = { name: displayName, scores: [], dates: new Set() };
     byStudent[a.user_id].scores.push(+a.percentage);
     byStudent[a.user_id].dates.add(a.submitted_at?.slice(0,10));
   });
@@ -857,9 +870,9 @@ function buildDCPDFDoc(items) {
         ? doc.splitTextToSize('Explanation:  ' + safe(q.explanation), CW - 14)
         : [];
 
-      // row heights for the 2x2 option grid
-      const rowH1 = Math.max(optLines[0].length, optLines[1].length) * LH + 6;
-      const rowH2 = Math.max(optLines[2].length, optLines[3].length) * LH + 6;
+        // row heights for the 2x2 option grid — add 1 extra LH for the "✔ Correct" tag line
+        const rowH1 = Math.max(optLines[0].length, optLines[1].length) * LH + LH + 6;
+        const rowH2 = Math.max(optLines[2].length, optLines[3].length) * LH + LH + 6;
       const expH  = expLines.length ? expLines.length * LH + 8 : 0;
       const topH  = q.topic ? 8 : 0;
       const cardH = qLines.length * LH + 8 + rowH1 + rowH2 + expH + topH + 10;
@@ -907,7 +920,7 @@ function buildDCPDFDoc(items) {
         const rl = ['A','B','C','D'][ri];
         const lLines = optLines[li];
         const rLines = optLines[ri];
-        const rh = Math.max(lLines.length, rLines.length) * LH + 5;
+        const rh = Math.max(lLines.length, rLines.length) * LH + LH + 5;
 
         [
           { letter: ll, lines: lLines, ox: ML+6       },
@@ -929,10 +942,11 @@ function buildDCPDFDoc(items) {
           doc.setTextColor(...(isCorrect ? C.green : C.bodyText));
           lines.forEach((line, k) => { doc.text(line, ox+3, ty + k*LH + 3); });
           if (isCorrect) {
-            // draw a simple checkmark using ASCII
-            doc.setFontSize(10); doc.setFont(undefined,'bold');
+            // Draw (Correct) tag on its own line below option text, safely within box
+            const tagY = ty + lines.length * LH + 2;
+            doc.setFontSize(7.5); doc.setFont(undefined,'bold');
             doc.setTextColor(...C.green);
-            doc.text('(Correct)', ox + colW - doc.getTextWidth('(Correct)') - 2, ty+3);
+            doc.text('✔ Correct', ox + 3, tagY);
           }
         });
         ty += rh + 2;
@@ -980,7 +994,7 @@ function buildDCPDFDoc(items) {
 
         const pct    = +att.percentage;
         const pColor = pct>=70 ? C.green : pct>=50 ? C.yellow : C.red;
-        const name   = safe(att._profile?.full_name || att._profile?.email || 'Student');
+        const name   = safe(att._profile?._displayName || att._profile?.full_name || att._profile?.email || ('Student …' + att.user_id.slice(-6)));
 
         doc.setFontSize(7.5); doc.setFont(undefined,'normal'); doc.setTextColor(...C.bodyText);
         doc.text(doc.splitTextToSize(name, 54)[0], cols[0].x+2, y+5);
