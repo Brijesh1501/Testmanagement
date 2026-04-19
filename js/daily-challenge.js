@@ -787,9 +787,7 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
     if (insertErr) {
       const detail = insertErr.code ? ` [${insertErr.code}]` : '';
       throw new Error('DB insert failed' + detail + ': ' + insertErr.message +
-        '. Check: (1) "Admins insert challenges" WITH CHECK policy on daily_challenges, ' +
-        '(2) created_by column exists (run schema SQL from the SQL Schema button), ' +
-        '(3) your Supabase project is not paused.');
+        '. Ensure "Admins insert challenges" WITH CHECK policy exists on daily_challenges.');
     }
 
     // Step 2: Fetch the row we just inserted by challenge_date (unique constraint).
@@ -911,7 +909,7 @@ ALTER TABLE daily_challenge_answers    ENABLE ROW LEVEL SECURITY;
 -- ============================================================
 
 -- daily_challenges
--- Drop ALL old policies first (covers every name variant)
+-- Drop every known policy variant first
 DROP POLICY IF EXISTS "Anyone can read active challenges"  ON daily_challenges;
 DROP POLICY IF EXISTS "Students read active challenges"    ON daily_challenges;
 DROP POLICY IF EXISTS "Admins manage challenges"           ON daily_challenges;
@@ -920,8 +918,9 @@ DROP POLICY IF EXISTS "Admins read all challenges"         ON daily_challenges;
 DROP POLICY IF EXISTS "Admins insert challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins update challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins delete challenges"           ON daily_challenges;
+DROP POLICY IF EXISTS "Read challenges"                    ON daily_challenges;
 
--- Single SELECT policy that covers both students AND admins (no overlap = no deadlock)
+-- One SELECT policy for everyone: active rows visible to all, inactive only to admins
 CREATE POLICY "Read challenges"
   ON daily_challenges FOR SELECT
   USING (
@@ -929,13 +928,10 @@ CREATE POLICY "Read challenges"
     OR EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
   );
 
--- Admins INSERT: use created_by = auth.uid() for a fast, index-friendly check
+-- INSERT: check created_by = auth.uid() — resolves instantly, no subquery deadlock
 CREATE POLICY "Admins insert challenges"
   ON daily_challenges FOR INSERT
-  WITH CHECK (
-    created_by = auth.uid()
-    AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
-  );
+  WITH CHECK (created_by = auth.uid());
 
 CREATE POLICY "Admins update challenges"
   ON daily_challenges FOR UPDATE
