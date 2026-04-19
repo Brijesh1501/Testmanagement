@@ -435,8 +435,7 @@ function parseFormatLMR(text) {
 
   // Fallback: scan whole text for "N\nLETTER" or "N LETTER" pairs near end
   if (Object.keys(answerKey).length < 3) {
-    const pairs = [...text.matchAll(/(\d{1,3})\s*
-\s*([A-Da-d])/g)];
+    const pairs = [...text.matchAll(/(\d{1,3})\s*\s*([A-Da-d])/g)];
     pairs.forEach(m => { answerKey[parseInt(m[1])] = m[2].toUpperCase(); });
   }
 
@@ -446,17 +445,14 @@ function parseFormatLMR(text) {
   const mainText = text.replace(/ANSWER\s+KEY[\s\S]*/i, '');
 
   // Split on question number boundaries: line starting with number + dot
-  const blockRe = /(?:^|
-)(\d{1,3})\.\s+([\s\S]*?)(?=
-\d{1,3}\.\s+[A-Z"(a-z]|$)/g;
+  const blockRe = /(?:^|)(\d{1,3})\.\s+([\s\S]*?)(?=\d{1,3}\.\s+[A-Z"(a-z]|$)/g;
   let m;
   while ((m = blockRe.exec(mainText)) !== null) {
     const qNum   = parseInt(m[1]);
     const body   = m[2];
     if (!body || body.trim().length < 10) continue;
 
-    const lines  = body.split('
-').map(l => l.trim()).filter(l => l && !isJunk(l));
+    const lines  = body.split('').map(l => l.trim()).filter(l => l && !isJunk(l));
     if (lines.length < 2) continue;
 
     const opts   = { A: '', B: '', C: '', D: '' };
