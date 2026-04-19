@@ -780,13 +780,16 @@ async function saveDailyChallenge({ title, topics, date, count, timeLim, difficu
           title, topics, challenge_date: date, question_count: questions.length,
           time_limit_minutes: timeLim, difficulty,
           is_active: isScheduled ? false : true,
+          created_by: currentUser.id,
         }),
-      15000, 'inserting daily_challenges'
+      20000, 'inserting daily_challenges'
     );
     if (insertErr) {
       const detail = insertErr.code ? ` [${insertErr.code}]` : '';
       throw new Error('DB insert failed' + detail + ': ' + insertErr.message +
-        '. Ensure "Admins insert challenges" WITH CHECK policy exists on daily_challenges.');
+        '. Check: (1) "Admins insert challenges" WITH CHECK policy on daily_challenges, ' +
+        '(2) created_by column exists (run schema SQL from the SQL Schema button), ' +
+        '(3) your Supabase project is not paused.');
     }
 
     // Step 2: Fetch the row we just inserted by challenge_date (unique constraint).
@@ -908,6 +911,7 @@ ALTER TABLE daily_challenge_answers    ENABLE ROW LEVEL SECURITY;
 -- ============================================================
 
 -- daily_challenges
+-- Drop ALL old policies first (covers every name variant)
 DROP POLICY IF EXISTS "Anyone can read active challenges"  ON daily_challenges;
 DROP POLICY IF EXISTS "Students read active challenges"    ON daily_challenges;
 DROP POLICY IF EXISTS "Admins manage challenges"           ON daily_challenges;
@@ -917,35 +921,29 @@ DROP POLICY IF EXISTS "Admins insert challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins update challenges"           ON daily_challenges;
 DROP POLICY IF EXISTS "Admins delete challenges"           ON daily_challenges;
 
--- Students: only see active (live) challenges
-CREATE POLICY "Students read active challenges"
+-- Single SELECT policy that covers both students AND admins (no overlap = no deadlock)
+CREATE POLICY "Read challenges"
   ON daily_challenges FOR SELECT
   USING (
     is_active = true
-    AND NOT EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
+    OR EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
   );
 
--- Admins: see ALL challenges including inactive/scheduled ones
-CREATE POLICY "Admins read all challenges"
-  ON daily_challenges FOR SELECT
-  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
-
--- Split ALL into explicit INSERT/UPDATE/DELETE so WITH CHECK works on INSERT
+-- Admins INSERT: use created_by = auth.uid() for a fast, index-friendly check
 CREATE POLICY "Admins insert challenges"
   ON daily_challenges FOR INSERT
-  WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
+  WITH CHECK (
+    created_by = auth.uid()
+    AND EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin')
+  );
 
 CREATE POLICY "Admins update challenges"
   ON daily_challenges FOR UPDATE
-  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'))
+  USING    (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'))
   WITH CHECK (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
 CREATE POLICY "Admins delete challenges"
   ON daily_challenges FOR DELETE
-  USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
-
-CREATE POLICY "Admins select challenges"
-  ON daily_challenges FOR SELECT
   USING (EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role = 'admin'));
 
 -- daily_challenge_questions
