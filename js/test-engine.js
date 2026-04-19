@@ -275,13 +275,22 @@ function showAnswerReview() {
       <p style="font-size:14px;font-weight:500;margin-bottom:12px;line-height:1.6;">${q.question_text || q.question}</p>
       ${q.image_url ? `<img src="${q.image_url}" alt="" style="max-width:100%;max-height:200px;border-radius:8px;margin-bottom:12px;object-fit:contain;">` : ''}
       <div class="grid grid-cols-2 gap-2 mb-3">
-        ${['A', 'B', 'C', 'D'].map(l => `
-          <div style="padding:8px 12px;border-radius:8px;font-size:13px;
-            background:${l === q.correct_answer ? 'rgba(16,185,129,0.15)' : l === q.user_answer && !isCorrect ? 'rgba(239,68,68,0.1)' : 'var(--surface2)'};
-            border:1px solid ${l === q.correct_answer ? 'rgba(16,185,129,0.4)' : l === q.user_answer && !isCorrect ? 'rgba(239,68,68,0.3)' : 'var(--border)'};
-            color:${l === q.correct_answer ? '#10b981' : l === q.user_answer && !isCorrect ? '#ef4444' : 'var(--text)'};">
-            <strong>${l}.</strong> ${q['option_' + l.toLowerCase()]}
-          </div>`).join('')}
+        ${['A', 'B', 'C', 'D'].map(l => {
+          const isCorrectOpt = l === q.correct_answer;
+          const isWrongPick  = l === q.user_answer && !isCorrect;
+          return `
+          <div style="padding:8px 12px;border-radius:8px;font-size:13px;position:relative;
+            background:${isCorrectOpt ? 'rgba(16,185,129,0.15)' : isWrongPick ? 'rgba(239,68,68,0.1)' : 'var(--surface2)'};
+            border:1px solid ${isCorrectOpt ? 'rgba(16,185,129,0.5)' : isWrongPick ? 'rgba(239,68,68,0.3)' : 'var(--border)'};
+            color:${isCorrectOpt ? '#10b981' : isWrongPick ? '#ef4444' : 'var(--text)'};
+            box-shadow:${isCorrectOpt ? '0 0 0 2px rgba(16,185,129,0.2)' : 'none'};">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <span><strong>${l}.</strong> ${q['option_' + l.toLowerCase()]}</span>
+              ${isCorrectOpt ? `<span style="font-size:10px;font-weight:700;background:#10b981;color:white;padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0;">✓ Correct</span>` : ''}
+              ${isWrongPick  ? `<span style="font-size:10px;font-weight:700;background:#ef4444;color:white;padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0;">✗ Your Answer</span>` : ''}
+            </div>
+          </div>`;
+        }).join('')}
       </div>
       ${q.explanation ? `<div style="font-size:13px;color:#60a5fa;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;line-height:1.6;"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
     </div>`;
