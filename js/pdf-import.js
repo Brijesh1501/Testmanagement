@@ -145,6 +145,9 @@ const JUNK_PATTERNS = [
   /Want to earn/i, /Studocu is not sponsored/i, /^\d{1,3}$/, /^NCLEX RN ACTUAL EXAM/i,
   /^BANK OF REAL QUESTIONS/i, /^ANSWERS NCLEX/i, /^NORCET \d+ SELECTION DOSE/i,
   /Granth Shree/i, /Berlin0145/i, /^\s*$/,
+  // LMR / Jitu Sir booklet headers
+  /^LMR\s*\(QUESTIONS BOOKLET/i, /^CONNECT WITH JITU SIR/i,
+  /^-+:+\s*\d+\s*:+-+$/, /^By-JITU SIR$/i,
 ];
 function isJunk(line) {
   const t = line.trim();
@@ -163,6 +166,9 @@ function parsePdfText(rawText) {
   const f2 = parseFormatNumbered(cleaned);   if (f2.length >= 3) return f2;
   const fb3 = parseFormatNCLEX(rawText);     if (fb3.length >= 3) return fb3;
   const fb1 = parseFormatQuestion(rawText);  if (fb1.length >= 3) return fb1;
+  // Format 5: LMR / Jitu Sir style — numbered questions, A./a. options, grid answer key at end
+  const f5 = parseFormatLMR(cleaned);        if (f5.length >= 3) return f5;
+  const f5r = parseFormatLMR(rawText);       if (f5r.length >= 3) return f5r;
   return [];
 }
 
@@ -394,6 +400,104 @@ function parseFormatNumbered(text) {
     const qText = qLines.join(' ').trim(); const answer = answerKey[qNum] || '';
     if (qText && opts.A && opts.B && opts.C && opts.D && answer)
       qs.push({ question: qText, option_a: opts.A, option_b: opts.B, option_c: opts.C, option_d: opts.D, answer, explanation: '' });
+  }
+  return qs;
+}
+
+// ─── Format 5: LMR / Jitu Sir style ─────────────────────────
+// Layout:
+//   1.  <question text (possibly multi-line)>
+//       A. <option>  /  a. <option>
+//       B. <option>  /  b. <option>
+//       C. <option>  /  c. <option>
+//       D. <option>  /  d. <option>
+//   (questions may span two columns on the page)
+//   ANSWER KEY section at end with grid: "1 2 3 4 5\nC D C D C"
+function parseFormatLMR(text) {
+  const qs = [];
+
+  // ── Step 1: Extract answer key from grid at end ───────────────
+  // Matches table rows like "1 2 3 4 5\nC D C D C" or "1\n2\n3...\nC\nD\nC"
+  // Also handles inline "1 C  2 D  3 A" style
+  const answerKey = {};
+
+  // Try grid style: sequences of numbers then sequences of letters
+  const akSection = text.match(/ANSWER\s+KEY[\s\S]{0,200}((?:\d+[\s	]+){2,}[\s\S]{0,500})/i);
+  if (akSection) {
+    const akText = akSection[1];
+    // Extract all numbers and all letters in order from the answer key block
+    const nums = [...akText.matchAll(/(\d{1,3})/g)].map(m => parseInt(m[1]));
+    const lets = [...akText.matchAll(/([A-Da-d])/g)].map(m => m[1].toUpperCase());
+    if (nums.length > 0 && lets.length >= nums.length) {
+      nums.forEach((n, i) => { if (lets[i]) answerKey[n] = lets[i]; });
+    }
+  }
+
+  // Fallback: scan whole text for "N\nLETTER" or "N LETTER" pairs near end
+  if (Object.keys(answerKey).length < 3) {
+    const pairs = [...text.matchAll(/(\d{1,3})\s*
+\s*([A-Da-d])/g)];
+    pairs.forEach(m => { answerKey[parseInt(m[1])] = m[2].toUpperCase(); });
+  }
+
+  // ── Step 2: Split text into question blocks ───────────────────
+  // Match blocks starting with a number followed by a period/dot and content
+  // Stop before ANSWER KEY section
+  const mainText = text.replace(/ANSWER\s+KEY[\s\S]*/i, '');
+
+  // Split on question number boundaries: line starting with number + dot
+  const blockRe = /(?:^|
+)(\d{1,3})\.\s+([\s\S]*?)(?=
+\d{1,3}\.\s+[A-Z"(a-z]|$)/g;
+  let m;
+  while ((m = blockRe.exec(mainText)) !== null) {
+    const qNum   = parseInt(m[1]);
+    const body   = m[2];
+    if (!body || body.trim().length < 10) continue;
+
+    const lines  = body.split('
+').map(l => l.trim()).filter(l => l && !isJunk(l));
+    if (lines.length < 2) continue;
+
+    const opts   = { A: '', B: '', C: '', D: '' };
+    const qLines = [];
+    let   foundOpts = false;
+
+    // Option regex: A. / a. / A) / a) at start of line
+    const optRe = /^([A-Da-d])[.)]\s+(.+)/;
+
+    for (const line of lines) {
+      const optM = line.match(optRe);
+      if (optM) {
+        foundOpts = true;
+        const key = optM[1].toUpperCase();
+        if (!opts[key]) opts[key] = optM[2].trim();
+      } else if (!foundOpts) {
+        // Skip junk header lines embedded in two-column PDFs
+        if (/LMR|JITU SIR|CONNECT WITH|QUESTIONS BOOKLET/i.test(line)) continue;
+        if (/^-*:+\s*\d+\s*:+-*$/.test(line)) continue; // page markers like "-:: 2 ::-"
+        qLines.push(line);
+      } else if (foundOpts) {
+        // Continuation of last option (line wrapped)
+        const lastKey = ['D','C','B','A'].find(k => opts[k]);
+        if (lastKey && !line.match(optRe)) opts[lastKey] += ' ' + line;
+      }
+    }
+
+    const qText  = qLines.join(' ').trim().replace(/\s{2,}/g, ' ');
+    const answer = answerKey[qNum] || '';
+
+    if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
+      qs.push({
+        question:    qText,
+        option_a:    opts.A,
+        option_b:    opts.B,
+        option_c:    opts.C,
+        option_d:    opts.D,
+        answer,
+        explanation: '',
+      });
+    }
   }
   return qs;
 }
