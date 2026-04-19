@@ -265,34 +265,34 @@ function showAnswerReview() {
   const result = window._lastResult;
   document.getElementById('answer-review-section').style.display = '';
   document.getElementById('answer-review-list').innerHTML = result.questions.map((q, i) => {
-    const isCorrect = q.is_correct;
-    const skipped   = !q.user_answer;
+    const isCorrect     = q.is_correct;
+    const skipped       = !q.user_answer;
+    // Support both field names: live test uses q.answer, saved attempts use q.correct_answer
+    const correctLetter = q.correct_answer || q.answer;
+    const opts = ['A', 'B', 'C', 'D'].map(l => {
+      const isCorrectOpt = l === correctLetter;
+      const isWrongPick  = l === q.user_answer && !isCorrect;
+      return `<div style="padding:10px 12px;border-radius:8px;font-size:13px;
+          background:${isCorrectOpt ? 'rgba(16,185,129,0.15)' : isWrongPick ? 'rgba(239,68,68,0.1)' : 'var(--surface2)'};
+          border:1px solid ${isCorrectOpt ? 'rgba(16,185,129,0.55)' : isWrongPick ? 'rgba(239,68,68,0.35)' : 'var(--border)'};
+          color:${isCorrectOpt ? '#10b981' : isWrongPick ? '#ef4444' : 'var(--text)'};
+          box-shadow:${isCorrectOpt ? '0 0 0 2px rgba(16,185,129,0.15)' : 'none'};">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;">
+            <span><strong>${l}.</strong> ${q['option_' + l.toLowerCase()]}</span>
+            ${isCorrectOpt ? '<span style="flex-shrink:0;font-size:10px;font-weight:700;background:#10b981;color:#fff;padding:2px 8px;border-radius:20px;line-height:1.8;">✓ Correct</span>' : ''}
+            ${isWrongPick  ? '<span style="flex-shrink:0;font-size:10px;font-weight:700;background:#ef4444;color:#fff;padding:2px 8px;border-radius:20px;line-height:1.8;">✗ Your Answer</span>' : ''}
+          </div>
+        </div>`;
+    }).join('');
     return `
     <div class="glass p-5" style="border-left:3px solid ${isCorrect ? '#10b981' : skipped ? '#f59e0b' : '#ef4444'};">
       <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:8px;">
         Q${i + 1} · ${isCorrect ? '✅ Correct' : skipped ? '⏭ Skipped' : '❌ Incorrect'}
       </div>
       <p style="font-size:14px;font-weight:500;margin-bottom:12px;line-height:1.6;">${q.question_text || q.question}</p>
-      ${q.image_url ? `<img src="${q.image_url}" alt="" style="max-width:100%;max-height:200px;border-radius:8px;margin-bottom:12px;object-fit:contain;">` : ''}
-      <div class="grid grid-cols-2 gap-2 mb-3">
-        ${['A', 'B', 'C', 'D'].map(l => {
-          const isCorrectOpt = l === q.correct_answer;
-          const isWrongPick  = l === q.user_answer && !isCorrect;
-          return `
-          <div style="padding:8px 12px;border-radius:8px;font-size:13px;position:relative;
-            background:${isCorrectOpt ? 'rgba(16,185,129,0.15)' : isWrongPick ? 'rgba(239,68,68,0.1)' : 'var(--surface2)'};
-            border:1px solid ${isCorrectOpt ? 'rgba(16,185,129,0.5)' : isWrongPick ? 'rgba(239,68,68,0.3)' : 'var(--border)'};
-            color:${isCorrectOpt ? '#10b981' : isWrongPick ? '#ef4444' : 'var(--text)'};
-            box-shadow:${isCorrectOpt ? '0 0 0 2px rgba(16,185,129,0.2)' : 'none'};">
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-              <span><strong>${l}.</strong> ${q['option_' + l.toLowerCase()]}</span>
-              ${isCorrectOpt ? `<span style="font-size:10px;font-weight:700;background:#10b981;color:white;padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0;">✓ Correct</span>` : ''}
-              ${isWrongPick  ? `<span style="font-size:10px;font-weight:700;background:#ef4444;color:white;padding:2px 7px;border-radius:20px;white-space:nowrap;flex-shrink:0;">✗ Your Answer</span>` : ''}
-            </div>
-          </div>`;
-        }).join('')}
-      </div>
-      ${q.explanation ? `<div style="font-size:13px;color:#60a5fa;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;line-height:1.6;"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
+      ${q.image_url ? '<img src="' + q.image_url + '" alt="" style="max-width:100%;max-height:200px;border-radius:8px;margin-bottom:12px;object-fit:contain;">' : ''}
+      <div class="grid grid-cols-2 gap-2 mb-3">${opts}</div>
+      ${q.explanation ? '<div style="font-size:13px;color:#60a5fa;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);border-radius:8px;padding:10px;line-height:1.6;"><strong>Explanation:</strong> ' + q.explanation + '</div>' : ''}
     </div>`;
   }).join('');
 }
