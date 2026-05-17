@@ -139,9 +139,7 @@ function showParseResults(setStatus, filename) {
   }
 }
 
-// ============================================================
-// ─── JUNK FILTER (shared by all parsers) ────────────────────
-// ============================================================
+// ─── PARSERS ─────────────────────────────────────────────────
 const JUNK_PATTERNS = [
   /^@\w+/, /^lOMoARcPSD/, /Downloaded by/i, /Distribution of this document/i,
   /Want to earn/i, /Studocu is not sponsored/i, /^\d{1,3}$/, /^NCLEX RN ACTUAL EXAM/i,
@@ -150,11 +148,6 @@ const JUNK_PATTERNS = [
   // LMR / Jitu Sir booklet headers
   /^LMR\s*\(QUESTIONS BOOKLET/i, /^CONNECT WITH JITU SIR/i,
   /^-+:+\s*\d+\s*:+-+$/, /^By-JITU SIR$/i,
-  // Nursing Next Live headers
-  /^Nursing\s+Next\s+Li?ve/i, /^NNL\s+PRACTICE\s+PEARLS/i,
-  /^The\s+Next\s+Level\s+of\s+Nursing/i,
-  /^©\s*This\s+content\s+is\s+the\s+copyright/i,
-  /^No\s+part\s+of\s+this\s+notes/i,
 ];
 function isJunk(line) {
   const t = line.trim();
@@ -163,212 +156,23 @@ function isJunk(line) {
 }
 function cleanLines(text) { return text.split('\n').filter(l => !isJunk(l)).join('\n'); }
 
-// ============================================================
-// ─── MASTER PARSER DISPATCHER ───────────────────────────────
-// ============================================================
 function parsePdfText(rawText) {
   const cleaned = cleanLines(rawText);
-
-  // Format 6: Nursing Next Live / Practice Pearls style
-  // — numbered Qs, lowercase a/b/c/d options (1 or 2 per line), answer key grid at bottom
-  const f6  = parseFormatNursingNextLive(cleaned);  if (f6.length  >= 3) return f6;
-  const f6r = parseFormatNursingNextLive(rawText);  if (f6r.length >= 3) return f6r;
-
-  // Format 4: NNL/TAT/AHN style — "Question N:" with standalone A:/B:/C:/D: labels
-  const f4  = parseFormatNNL(cleaned);              if (f4.length  >= 3) return f4;
-  const f4r = parseFormatNNL(rawText);              if (f4r.length >= 3) return f4r;
-
-  // Format 1: "QUESTION N" header blocks with A./B./C./D. options
-  const f1  = parseFormatQuestion(cleaned);         if (f1.length  >= 3) return f1;
-
-  // Format 2: NCLEX numbered with inline Rationale
-  const f3  = parseFormatNCLEX(cleaned);            if (f3.length  >= 3) return f3;
-
-  // Format 3: Numbered + Answer Key at end
-  const f2  = parseFormatNumbered(cleaned);         if (f2.length  >= 3) return f2;
-
-  // Fallbacks on raw text
-  const fb3 = parseFormatNCLEX(rawText);            if (fb3.length >= 3) return fb3;
-  const fb1 = parseFormatQuestion(rawText);         if (fb1.length >= 3) return fb1;
-
-  // Format 5: LMR / Jitu Sir style — numbered Qs, A./a. options, grid answer key at end
-  const f5  = parseFormatLMR(cleaned);              if (f5.length  >= 3) return f5;
-  const f5r = parseFormatLMR(rawText);              if (f5r.length >= 3) return f5r;
-
+  // Format 4: NNL/TAT/AHN style — "Question N: …" with "A:\n<text>" and "Correct Answer: X"
+  const f4 = parseFormatNNL(cleaned);        if (f4.length >= 3) return f4;
+  const f4r = parseFormatNNL(rawText);       if (f4r.length >= 3) return f4r;
+  const f1 = parseFormatQuestion(cleaned);   if (f1.length >= 3) return f1;
+  const f3 = parseFormatNCLEX(cleaned);      if (f3.length >= 3) return f3;
+  const f2 = parseFormatNumbered(cleaned);   if (f2.length >= 3) return f2;
+  const fb3 = parseFormatNCLEX(rawText);     if (fb3.length >= 3) return fb3;
+  const fb1 = parseFormatQuestion(rawText);  if (fb1.length >= 3) return fb1;
+  // Format 5: LMR / Jitu Sir style — numbered questions, A./a. options, grid answer key at end
+  const f5 = parseFormatLMR(cleaned);        if (f5.length >= 3) return f5;
+  const f5r = parseFormatLMR(rawText);       if (f5r.length >= 3) return f5r;
   return [];
 }
 
-// ============================================================
-// ─── FORMAT 6: NURSING NEXT LIVE / PRACTICE PEARLS ──────────
-// ============================================================
-//
-// Layout:
-//   1. Question text spanning one or more lines?
-//      a. OptionA   b. OptionB        ← two options side-by-side (2+ spaces apart)
-//      c. OptionC   d. OptionD
-//   — OR —
-//      a. OptionA
-//      b. OptionB
-//      c. OptionC
-//      d. OptionD
-//
-//   Answer key block at BOTTOM of each section (not inline):
-//   "1. b  2. d  3. a  4. b  5. d  6. c  7. b  8. c  9. c  10. b  11. a"
-//   "12. b  13. d"
-//
-// Section headers ("NORCET 2023 (PRELIMS)", "FAST TRACK QUESTIONS", etc.)
-// and copyright lines are stripped before parsing.
-//
-function parseFormatNursingNextLive(text) {
-
-  // ── Section-header patterns specific to this format ─────────────────────────
-  const NNL_HEADERS = [
-    /^ANSWER\s+KEY\s*$/i,
-    /^NORCET\s+\d{4}/i,
-    /^FAST\s+TRACK\s+QUESTIONS\s*$/i,
-    /^RECALL\s+QUESTIONS\s*$/i,
-    /^PROBABLE\s+QUESTIONS\s*$/i,
-    /^Applied\s+Pharmacology\s*$/i,
-    /^Nursing\s+Next\s+Li?ve/i,
-    /^NNL\s+PRACTICE\s+PEARLS/i,
-    /^The\s+Next\s+Level/i,
-    /^\d{1,3}\s*$/,                         // lone page numbers
-    /^©\s*This\s+content/i,
-    /^No\s+part\s+of\s+this\s+notes/i,
-    /^Page\s+\d+/i,
-  ];
-
-  function isNNLHeader(line) {
-    const t = line.trim();
-    if (!t) return true;
-    if (NNL_HEADERS.some(rx => rx.test(t))) return true;
-    // Answer-key data rows: 3+ "N. letter" pairs on one line
-    const pairs = [...t.matchAll(/\d{1,3}\.\s+[a-dA-D]\b/g)];
-    if (pairs.length >= 3) return true;
-    return false;
-  }
-
-  // ── Step 1: Harvest answer key from ALL answer-key rows in the text ──────────
-  const answerKey = {};
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    const pairs = [...t.matchAll(/(\d{1,3})\.\s+([a-dA-D])\b/g)];
-    if (pairs.length >= 3) {
-      for (const [, num, letter] of pairs) {
-        // Don't overwrite with a later duplicate section (e.g. NORCET 2020 repeats Qs)
-        const n = parseInt(num);
-        if (!answerKey[n]) answerKey[n] = letter.toUpperCase();
-      }
-    }
-  }
-
-  // Also capture 2-pair answer key rows that appear at the very end of a section
-  // (e.g. "12. b  13. d") by looking for lines adjacent to known key rows.
-  // Simple approach: any line with 1–2 "N. letter" pairs that immediately follows
-  // a line that was a key row.
-  const rawLines = text.split('\n');
-  let prevWasKeyRow = false;
-  for (const line of rawLines) {
-    const t = line.trim();
-    const pairs = [...t.matchAll(/(\d{1,3})\.\s+([a-dA-D])\b/g)];
-    if (pairs.length >= 3) {
-      prevWasKeyRow = true;
-      continue;
-    }
-    if (prevWasKeyRow && pairs.length >= 1 && pairs.length <= 4) {
-      // Likely a continuation row of the answer key
-      for (const [, num, letter] of pairs) {
-        const n = parseInt(num);
-        if (!answerKey[n]) answerKey[n] = letter.toUpperCase();
-      }
-    }
-    prevWasKeyRow = (pairs.length >= 3);
-  }
-
-  if (Object.keys(answerKey).length < 3) return []; // Not this format
-
-  // ── Step 2: Strip headers/key rows, then split into question blocks ──────────
-  const bodyLines = rawLines.filter(l => !isNNLHeader(l));
-  const bodyText  = bodyLines.join('\n');
-
-  // Split on "^\d{1,3}\." at the start of a line
-  // Match: question number + rest of block up to the next question number
-  const blockRe = /(?:^|\n)(\d{1,3})\.\s+([\s\S]*?)(?=\n\d{1,3}\.\s+[^\d\s]|$)/g;
-  const qs = [];
-  let match;
-
-  while ((match = blockRe.exec(bodyText)) !== null) {
-    const qNum = parseInt(match[1]);
-    const body = match[2];
-
-    if (!body || body.trim().length < 8) continue;
-
-    const bLines = body.split('\n').map(l => l.trim()).filter(Boolean);
-    if (bLines.length < 2) continue;
-
-    // ── Parse question text and a/b/c/d options ──────────────────────────────
-    const opts     = { A: '', B: '', C: '', D: '' };
-    const qLines   = [];
-    let foundOpts  = false;
-
-    for (const bl of bLines) {
-      if (isNNLHeader(bl)) continue;
-
-      // ── Two options on one line: "a. Text1   b. Text2" ───────────────────
-      const twoOpt = bl.match(
-        /^([a-dA-D])\.\s+(.+?)\s{2,}([a-dA-D])\.\s+(.+)$/
-      );
-      if (twoOpt) {
-        foundOpts = true;
-        const [, l1, t1, l2, t2] = twoOpt;
-        if (!opts[l1.toUpperCase()]) opts[l1.toUpperCase()] = t1.trim();
-        if (!opts[l2.toUpperCase()]) opts[l2.toUpperCase()] = t2.trim();
-        continue;
-      }
-
-      // ── Single option per line: "a. Text" ────────────────────────────────
-      const singleOpt = bl.match(/^([a-dA-D])\.\s+(.+)/);
-      if (singleOpt) {
-        foundOpts = true;
-        const key = singleOpt[1].toUpperCase();
-        if (!opts[key]) opts[key] = singleOpt[2].trim();
-        continue;
-      }
-
-      if (!foundOpts) {
-        // Still in question-text territory
-        if (/^\d{1,3}$/.test(bl)) continue;  // skip stray page numbers
-        qLines.push(bl);
-      } else {
-        // Could be a wrapped continuation of the last option
-        const lastKey = ['D', 'C', 'B', 'A'].find(k => opts[k]);
-        if (lastKey) opts[lastKey] += ' ' + bl;
-      }
-    }
-
-    const qText  = qLines.join(' ').trim().replace(/\s{2,}/g, ' ');
-    const answer = answerKey[qNum] || '';
-
-    if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
-      qs.push({
-        question:    qText,
-        option_a:    opts.A,
-        option_b:    opts.B,
-        option_c:    opts.C,
-        option_d:    opts.D,
-        answer,
-        explanation: '',
-      });
-    }
-  }
-
-  return qs;
-}
-
-// ============================================================
-// ─── FORMAT 4: NNL / TAT / AHN STYLE ────────────────────────
-// ============================================================
-//
+// ─── Format 4: NNL / TAT / AHN style ─────────────────────────
 // Layout:
 //   Question N: <question text, may wrap multiple lines>
 //   A:
@@ -383,6 +187,8 @@ function parseFormatNursingNextLive(text) {
 //   Rationale / Explanation:
 //   <explanation text, multi-line>
 //
+// The options labels (A:/B:/C:/D:) always appear as standalone lines
+// immediately before the four option texts in order.
 function parseFormatNNL(text) {
   const qs = [];
 
@@ -508,10 +314,7 @@ function parseFormatNNL(text) {
   return qs;
 }
 
-// ============================================================
-// ─── FORMAT 1: "QUESTION N" HEADER BLOCKS ───────────────────
-// ============================================================
-// Format: QUESTION N → A. B. C. D. → Answer: X
+// Format 1: QUESTION N → A. B. C. D. → Answer: X
 function parseFormatQuestion(text) {
   const qs = []; const re = /QUESTION\s+\d+\s*\n([\s\S]*?)(?=QUESTION\s+\d+\s*\n|$)/gi; let m;
   while ((m = re.exec(text)) !== null) {
@@ -536,9 +339,7 @@ function parseFormatQuestion(text) {
   return qs;
 }
 
-// ============================================================
-// ─── FORMAT 2: NCLEX NUMBERED WITH RATIONALE ────────────────
-// ============================================================
+// Format 2: NCLEX numbered with Rationale
 function parseFormatNCLEX(text) {
   const BULLET_RE = /[\u2022\u25cf\u2023\u2043\uf0b7\uf0a7\u25aa\u25ab\u2012\u2013\u2014]/g;
   const cleaned   = text.replace(BULLET_RE, '').replace(/\r\n/g, '\n');
@@ -571,9 +372,7 @@ function parseFormatNCLEX(text) {
   return qs;
 }
 
-// ============================================================
-// ─── FORMAT 3: NUMBERED + ANSWER KEY AT END ─────────────────
-// ============================================================
+// Format 3: Numbered + Answer Key at end
 function parseFormatNumbered(text) {
   const answerKey = {};
   const answerKeySection = text.match(/Answer\s*[Kk]ey[\s\S]{0,50}\n([\s\S]+)/i);
@@ -605,10 +404,7 @@ function parseFormatNumbered(text) {
   return qs;
 }
 
-// ============================================================
-// ─── FORMAT 5: LMR / JITU SIR STYLE ────────────────────────
-// ============================================================
-//
+// ─── Format 5: LMR / Jitu Sir style ─────────────────────────
 // Layout:
 //   1.  <question text (possibly multi-line)>
 //       A. <option>  /  a. <option>
@@ -617,18 +413,21 @@ function parseFormatNumbered(text) {
 //       D. <option>  /  d. <option>
 //   (questions may span two columns on the page)
 //   ANSWER KEY section at end with grid: "1 2 3 4 5\nC D C D C"
-//
 function parseFormatLMR(text) {
   const qs = [];
 
   // ── Step 1: Extract answer key from grid at end ───────────────
+  // Matches table rows like "1 2 3 4 5\nC D C D C" or "1\n2\n3...\nC\nD\nC"
+  // Also handles inline "1 C  2 D  3 A" style
   const answerKey = {};
 
-  const akSection = text.match(/ANSWER\s+KEY[\s\S]{0,200}((?:\d+[\s\t]+){2,}[\s\S]{0,500})/i);
+  // Try grid style: sequences of numbers then sequences of letters
+  const akSection = text.match(/ANSWER\s+KEY[\s\S]{0,200}((?:\d+[\s	]+){2,}[\s\S]{0,500})/i);
   if (akSection) {
     const akText = akSection[1];
-    const nums = [...akText.matchAll(/(\d{1,3})/g)].map(m => parseInt(m[1]));
-    const lets = [...akText.matchAll(/([A-Da-d])/g)].map(m => m[1].toUpperCase());
+    // Extract all numbers and all letters in order from the answer key block
+    const nums = [...akText.matchAll(/(\d{1,3})/g)].map(m => parseInt(m[1]));
+    const lets = [...akText.matchAll(/([A-Da-d])/g)].map(m => m[1].toUpperCase());
     if (nums.length > 0 && lets.length >= nums.length) {
       nums.forEach((n, i) => { if (lets[i]) answerKey[n] = lets[i]; });
     }
@@ -636,27 +435,31 @@ function parseFormatLMR(text) {
 
   // Fallback: scan whole text for "N\nLETTER" or "N LETTER" pairs near end
   if (Object.keys(answerKey).length < 3) {
-    const pairs = [...text.matchAll(/(\d{1,3})\s*\n\s*([A-Da-d])/g)];
+    const pairs = [...text.matchAll(/(\d{1,3})\s*\s*([A-Da-d])/g)];
     pairs.forEach(m => { answerKey[parseInt(m[1])] = m[2].toUpperCase(); });
   }
 
   // ── Step 2: Split text into question blocks ───────────────────
+  // Match blocks starting with a number followed by a period/dot and content
+  // Stop before ANSWER KEY section
   const mainText = text.replace(/ANSWER\s+KEY[\s\S]*/i, '');
 
-  const blockRe = /(?:^|\n)(\d{1,3})\.\s+([\s\S]*?)(?=\n\d{1,3}\.\s+[A-Z"(a-z]|$)/g;
+  // Split on question number boundaries: line starting with number + dot
+  const blockRe = /(?:^|)(\d{1,3})\.\s+([\s\S]*?)(?=\d{1,3}\.\s+[A-Z"(a-z]|$)/g;
   let m;
   while ((m = blockRe.exec(mainText)) !== null) {
     const qNum   = parseInt(m[1]);
     const body   = m[2];
     if (!body || body.trim().length < 10) continue;
 
-    const lines  = body.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+    const lines  = body.split('').map(l => l.trim()).filter(l => l && !isJunk(l));
     if (lines.length < 2) continue;
 
     const opts   = { A: '', B: '', C: '', D: '' };
     const qLines = [];
     let   foundOpts = false;
 
+    // Option regex: A. / a. / A) / a) at start of line
     const optRe = /^([A-Da-d])[.)]\s+(.+)/;
 
     for (const line of lines) {
@@ -666,10 +469,12 @@ function parseFormatLMR(text) {
         const key = optM[1].toUpperCase();
         if (!opts[key]) opts[key] = optM[2].trim();
       } else if (!foundOpts) {
+        // Skip junk header lines embedded in two-column PDFs
         if (/LMR|JITU SIR|CONNECT WITH|QUESTIONS BOOKLET/i.test(line)) continue;
-        if (/^-*:+\s*\d+\s*:+-*$/.test(line)) continue;
+        if (/^-*:+\s*\d+\s*:+-*$/.test(line)) continue; // page markers like "-:: 2 ::-"
         qLines.push(line);
       } else if (foundOpts) {
+        // Continuation of last option (line wrapped)
         const lastKey = ['D','C','B','A'].find(k => opts[k]);
         if (lastKey && !line.match(optRe)) opts[lastKey] += ' ' + line;
       }
@@ -693,9 +498,7 @@ function parseFormatLMR(text) {
   return qs;
 }
 
-// ============================================================
 // ─── IMPORT ──────────────────────────────────────────────────
-// ============================================================
 async function importPdfQuestions() {
   const baseName = document.getElementById('pdf-series-name').value.trim();
   if (!baseName)           { showToast('Enter a base name for the test series.', 'error'); return; }
