@@ -169,6 +169,9 @@ function parsePdfText(rawText) {
   // Format 5: LMR / Jitu Sir style — numbered questions, A./a. options, grid answer key at end
   const f5 = parseFormatLMR(cleaned);        if (f5.length >= 3) return f5;
   const f5r = parseFormatLMR(rawText);       if (f5r.length >= 3) return f5r;
+  // Format 6: PPQ/NORCET style — "N. <question>" with "a./b./c./d." options, "Answer: x", "Rationale: …"
+  const f6 = parseFormatPPQ(cleaned);        if (f6.length >= 3) return f6;
+  const f6r = parseFormatPPQ(rawText);       if (f6r.length >= 3) return f6r;
   return [];
 }
 
@@ -492,6 +495,107 @@ function parseFormatLMR(text) {
         option_d:    opts.D,
         answer,
         explanation: '',
+      });
+    }
+  }
+  return qs;
+}
+
+// ─── Format 6: PPQ / NORCET style ────────────────────────────
+// Layout:
+//   N. <question text (possibly multi-line)>
+//   a. <option A>
+//   b. <option B>
+//   c. <option C>
+//   d. <option D>
+//   Answer: x          ← single lowercase (or uppercase) letter
+//   Rationale: <text>  ← optional, multi-line
+//
+// Section headers like "FAST TRACK QUESTIONS" or "PROBABLE QUESTIONS"
+// reset the local question counter but are otherwise skipped.
+// Answer key may use "Answer: x (as per key)" — we strip the trailing note.
+function parseFormatPPQ(text) {
+  const qs = [];
+
+  // Split into blocks starting at a numbered question line
+  // Matches lines like "1.", "12.", "123." followed by space and content
+  const blockRe = /(?:^|\n)(\d{1,3})\.\s+([\s\S]*?)(?=\n\d{1,3}\.\s+[^\d]|$)/g;
+
+  // Strip section headers so they don't bleed into question text
+  const stripped = text.replace(
+    /^(?:FAST\s+TRACK\s+QUESTIONS?|PROBABLE\s+QUESTIONS?|NORCET\s+\d+[^\n]*|Page\s+\d+)[^\n]*/gim,
+    ''
+  );
+
+  let m;
+  while ((m = blockRe.exec(stripped)) !== null) {
+    const body  = m[2];
+    if (!body || body.trim().length < 10) continue;
+
+    const lines = body.split('\n').map(l => l.trim()).filter(l => l && !isJunk(l));
+    if (lines.length < 3) continue;
+
+    const opts    = { A: '', B: '', C: '', D: '' };
+    const qLines  = [];
+    let answer    = '';
+    let explanation = '';
+    let phase     = 'question';
+    const rationaleLines = [];
+
+    // Option regex: a. / b. / A. / a) / A) at line start
+    const optRe  = /^([a-dA-D])[.)]\s+(.+)/;
+    // Answer line: "Answer: b" or "Answer: B (as per key)" or "Answer: b, c"
+    const ansRe  = /^Answer\s*:\s*([a-dA-D])/i;
+    // Rationale / Explanation header
+    const ratRe  = /^Rationale\s*[:/]?\s*(.*)/i;
+
+    for (const line of lines) {
+      if (ratRe.test(line)) {
+        phase = 'rationale';
+        const rest = line.replace(/^Rationale\s*[:/]?\s*/i, '').trim();
+        if (rest) rationaleLines.push(rest);
+        continue;
+      }
+      if (phase === 'rationale') {
+        rationaleLines.push(line);
+        continue;
+      }
+      const ansM = line.match(ansRe);
+      if (ansM) {
+        answer = ansM[1].toUpperCase();
+        phase  = 'answer';
+        continue;
+      }
+      const optM = line.match(optRe);
+      if (optM) {
+        phase = 'options';
+        const key = optM[1].toUpperCase();
+        if (!opts[key]) opts[key] = optM[2].trim();
+        continue;
+      }
+      if (phase === 'options') {
+        // Continuation of last option (wrapped line)
+        const lastKey = ['D', 'C', 'B', 'A'].find(k => opts[k]);
+        if (lastKey) opts[lastKey] += ' ' + line;
+        continue;
+      }
+      if (phase === 'question') {
+        qLines.push(line);
+      }
+    }
+
+    const qText = qLines.join(' ').trim().replace(/\s{2,}/g, ' ');
+    explanation = rationaleLines.join(' ').trim();
+
+    if (qText && answer && opts.A && opts.B && opts.C && opts.D) {
+      qs.push({
+        question:    qText,
+        option_a:    opts.A,
+        option_b:    opts.B,
+        option_c:    opts.C,
+        option_d:    opts.D,
+        answer,
+        explanation: explanation || '',
       });
     }
   }
